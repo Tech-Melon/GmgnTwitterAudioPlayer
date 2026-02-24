@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <style>
+        :root {
+            --primary-color: #34c759;
+            --bg-color: #f5f5f7;
+            --card-bg: #ffffff;
+            --text-main: #1d1d1f;
+            --text-sec: #86868b;
+            --border-radius: 12px;
+        }
+
+        body {
+            width: 360px;
+            margin: 0;
+            padding: 16px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-main);
+        }
+
+        /* Header 样式 */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            background: var(--card-bg);
+            padding: 12px 16px;
+            border-radius: var(--border-radius);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .icon {
+            font-size: 20px;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #e5e5ea;
+            transition: .3s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        input:checked+.slider {
+            background-color: var(--primary-color);
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(20px);
+        }
+
+        /* 全局音量控制 (新增苹果风滑块) */
+        .volume-card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .volume-card span {
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none; /* 补上这一行：标准属性 */
+            width: 100%;
+            background: #e5e5ea;
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none; /* 这里的滑块部分也建议补上 */
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+        }
+
+        /* 卡片与表单 */
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+        }
+
+        .card h4 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            color: var(--text-sec);
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 14px;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
+            border-color: var(--primary-color);
+        }
+
+        input[type="file"] {
+            font-size: 12px;
+            margin-bottom: 10px;
+            width: 100%;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button.outline {
+            background: transparent;
+            color: var(--text-main);
+            border: 1px solid #d2d2d7;
+        }
+
+        /* 列表与按钮统一 */
+        .list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #f2f2f7;
+            font-size: 13px;
+        }
+
+        .list-item:last-child {
+            border-bottom: none;
+        }
+
+        .item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            overflow: hidden;
+        }
+
+        .item-title {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .item-sub {
+            color: var(--text-sec);
+            font-size: 11px;
+        }
+
+        .action-btns {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        /* 增加 width: auto !important 强制覆盖全局的 100% 宽度 */
+        .btn-icon {
+            background: #f2f2f7;
+            color: var(--text-main);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            min-width: 44px;
+            text-align: center;
+            width: auto !important;
+        }
+
+        .btn-icon:hover {
+            background: #e5e5ea;
+        }
+
+        .btn-icon.del {
+            color: #ff3b30;
+        }
+
+        .btn-icon.play {
+            color: var(--primary-color);
+            background: #eaf8ed;
+        }
+
+        .btn-icon.play:hover {
+            background: #d4f1db;
+        }
+
+        #toast {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-20px);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.3s ease;
+            z-index: 1000;
+            white-space: nowrap;
+        }
+
+        #toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+            backdrop-filter: blur(2px);
+        }
+
+        .modal {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 16px;
+            width: 280px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal h3 {
+            margin-top: 0;
+            font-size: 16px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="toast">操作成功</div>
+
+    <div class="header">
+        <h2 class="header-title"><span class="icon">🍉</span> GmgnAudioPlayer</h2>
+        <label class="switch">
+            <input type="checkbox" id="masterToggle" checked>
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="volume-card">
+        <span>🔊 音量</span>
+        <input type="range" id="globalVolume" min="0" max="1" step="0.05" value="1">
+        <span id="volumePercent">100%</span>
+    </div>
+
+    <div class="card">
+        <h4>添加映射规则</h4>
+        <input type="text" id="twitterId" placeholder="输入 Twitter ID (如: binance)">
+        <select id="audioSelect">
+            <option value="default.MP3">默认提示音</option>
+            <option value="preset1.MP3">预设音 1</option>
+            <option value="elonmusk.MP3">马斯克专属</option>
+            <option value="cz.MP3">CZ专属</option>
+            <option value="heyi.MP3">何一专属</option>
+        </select>
+        <button id="addRuleBtn">添加映射</button>
+    </div>
+
+    <div class="card">
+        <h4>自定义音频库</h4>
+        <input type="file" id="customAudioFile" accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,audio/*">
+        <button id="uploadBtn" class="outline">导入本地音频</button>
+        <div id="customAudioList" style="margin-top: 10px;"></div>
+    </div>
+    
+    <div class="card">
+        <h4>规则管理 (JSON)</h4>
+        <div style="display: flex; gap: 10px;">
+            <button id="exportRulesBtn" class="outline">导出规则</button>
+            <button id="importRulesBtn" class="outline">导入规则</button>
+            <input type="file" id="importRulesFile" accept=".json" style="display: none;">
+        </div>
+    </div>
+    
+    <div class="card" style="margin-bottom: 0;">
+        <h4>当前生效规则</h4>
+        <div id="rulesList"></div>
+    </div>
+
+    <div class="modal-overlay" id="editModal">
+        <div class="modal">
+            <h3>编辑规则</h3>
+            <input type="text" id="editTwitterId" readonly style="background:#f5f5f7; color:var(--text-sec)">
+            <select id="editAudioSelect"></select>
+            <div class="modal-actions">
+                <button id="cancelEditBtn" class="outline">取消</button>
+                <button id="saveEditBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
