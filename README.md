@@ -60,5 +60,13 @@
 **问：我换了一台新电脑，之前设置的好几十个声音和规则要重新弄吗？**
 答：不用那么麻烦！在面板的“规则管理”那里，点一下“导出规则”，会下载一个小文件。你把这个文件发到新电脑上，点“导入规则”选它，瞬间就能全部恢复！
 
+[盯盘配置](https://x.com/0xTechMelon/status/2026535815179075791?s=20)
+
+<img width="604" height="954" alt="image" src="https://github.com/user-attachments/assets/4735b512-8938-4e41-a2f0-09372dd10480" />
+
+[怎么生成自定义音频](https://x.com/0xTechMelon/status/2026538892728611186?s=20)
+
+<img width="598" height="378" alt="image" src="https://github.com/user-attachments/assets/38a42811-1709-41a6-8db7-0cfd47f005b5" />
+
 ---
 *Developed by 个人开发者 @技术瓜 🍉*
