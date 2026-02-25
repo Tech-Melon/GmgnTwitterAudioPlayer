@@ -69,4 +69,4 @@
 <img width="598" height="378" alt="image" src="https://github.com/user-attachments/assets/38a42811-1709-41a6-8db7-0cfd47f005b5" />
 
 ---
-*Developed by 个人开发者 @技术瓜 🍉*
+*Developed by 个人开发者 [@技术瓜 🍉](https://x.com/0xTechMelon) *
