@@ -86,12 +86,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             els.rulesList.innerHTML = '';
             Object.entries(mappings).forEach(([tid, audioVal]) => {
-                // 兼容新老数据结构
-                const isObj = typeof audioVal === 'object';
+                // 1. 兼容新老数据结构，加入强力容错 (防 null 报错)
+                const isObj = typeof audioVal === 'object' && audioVal !== null;
                 const actualAudioId = isObj ? audioVal.id : audioVal;
-                let displayAudioName = isObj ? audioVal.name : audioVal;
+                let displayAudioName = isObj ? (audioVal.name || '未知音频') : audioVal;
 
-                // 🌟 如果是自定义音频，且文件被删除了，增加红字提示，但不改变原始规则
+                // 🚨 2. 致命错误终极拦截：如果连有效 ID 都没有，直接跳过这条脏数据，保护后续列表正常渲染！
+                if (!actualAudioId || typeof actualAudioId !== 'string') {
+                    return;
+                }
+
+                // 3. 安全执行原有逻辑
                 let statusTag = '';
                 if (actualAudioId.startsWith('custom_') && !customAudios[actualAudioId]) {
                     statusTag = ' <span style="color:#ff3b30">(丢失,将播默认音)</span>';

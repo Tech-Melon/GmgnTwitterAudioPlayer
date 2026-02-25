@@ -41,7 +41,8 @@
                         }
                     }
                 } catch (error) {
-                    // 异常处理
+                    console.error("[GmgnAudioPlayer] 🚨 致命错误：解析失败！", error.message);
+                    console.error("导致崩溃的原始数据:", event.data);
                 }
             }
         });
