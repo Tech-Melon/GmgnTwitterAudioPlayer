@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <style>
+        /* ... 之前的 :root, body, .header 等样式全部保持不变 ... */
         :root {
             --primary-color: #34c759;
             --bg-color: #f5f5f7;
@@ -22,7 +23,6 @@
             color: var(--text-main);
         }
 
-        /* Header 样式 */
         .header {
             display: flex;
             align-items: center;
@@ -93,7 +93,6 @@
             transform: translateX(20px);
         }
 
-        /* 全局音量控制 (新增苹果风滑块) */
         .volume-card {
             background: var(--card-bg);
             border-radius: var(--border-radius);
@@ -113,7 +112,7 @@
 
         input[type="range"] {
             -webkit-appearance: none;
-            appearance: none; /* 补上这一行：标准属性 */
+            appearance: none;
             width: 100%;
             background: #e5e5ea;
             height: 6px;
@@ -123,7 +122,7 @@
 
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
-            appearance: none; /* 这里的滑块部分也建议补上 */
+            appearance: none;
             width: 16px;
             height: 16px;
             border-radius: 50%;
@@ -132,7 +131,6 @@
             cursor: pointer;
         }
 
-        /* 卡片与表单 */
         .card {
             background: var(--card-bg);
             border-radius: var(--border-radius);
@@ -195,7 +193,22 @@
             border: 1px solid #d2d2d7;
         }
 
-        /* 列表与按钮统一 */
+        /* 🌟 新增：滚动列表容器与丝滑滚动条 */
+        .list-container {
+            max-height: 220px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .list-container::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .list-container::-webkit-scrollbar-thumb {
+            background: #d2d2d7;
+            border-radius: 2px;
+        }
+
         .list-item {
             display: flex;
             justify-content: space-between;
@@ -234,7 +247,6 @@
             flex-shrink: 0;
         }
 
-        /* 增加 width: auto !important 强制覆盖全局的 100% 宽度 */
         .btn-icon {
             background: #f2f2f7;
             color: var(--text-main);
@@ -343,6 +355,7 @@
     <div class="card">
         <h4>添加映射规则</h4>
         <input type="text" id="twitterId" placeholder="输入 Twitter ID (如: binance)">
+        <input type="text" id="twitterRemark" placeholder="备注 (选填，如: 币安官推)">
         <select id="audioSelect">
             <option value="default.MP3">默认提示音</option>
             <option value="preset1.MP3">预设音 1</option>
@@ -355,11 +368,11 @@
 
     <div class="card">
         <h4>自定义音频库</h4>
-        <input type="file" id="customAudioFile" accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,audio/*">
+        <input type="file" id="customAudioFile" accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,audio/*" multiple>
         <button id="uploadBtn" class="outline">导入本地音频</button>
-        <div id="customAudioList" style="margin-top: 10px;"></div>
+        <div id="customAudioList" class="list-container" style="margin-top: 10px;"></div>
     </div>
-    
+
     <div class="card">
         <h4>规则管理 (JSON)</h4>
         <div style="display: flex; gap: 10px;">
@@ -368,16 +381,17 @@
             <input type="file" id="importRulesFile" accept=".json" style="display: none;">
         </div>
     </div>
-    
+
     <div class="card" style="margin-bottom: 0;">
         <h4>当前生效规则</h4>
-        <div id="rulesList"></div>
+        <div id="rulesList" class="list-container"></div>
     </div>
 
     <div class="modal-overlay" id="editModal">
         <div class="modal">
             <h3>编辑规则</h3>
             <input type="text" id="editTwitterId" readonly style="background:#f5f5f7; color:var(--text-sec)">
+            <input type="text" id="editTwitterRemark" placeholder="备注 (选填)">
             <select id="editAudioSelect"></select>
             <div class="modal-actions">
                 <button id="cancelEditBtn" class="outline">取消</button>
