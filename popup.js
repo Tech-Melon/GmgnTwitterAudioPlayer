@@ -333,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 showToast(msg, 3500);
                 els.customAudioFile.value = ''; // 清空选择框
-                els.uploadBtn.textContent = '导入本地音频'; // 恢复按钮
+                els.uploadBtn.textContent = '导入音频(支持zip)';
                 els.uploadBtn.disabled = false;
                 loadData(); // 瞬间刷新列表
             });
