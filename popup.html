@@ -368,8 +368,13 @@
 
     <div class="card">
         <h4>自定义音频库</h4>
-        <input type="file" id="customAudioFile" accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,audio/*" multiple>
-        <button id="uploadBtn" class="outline">导入本地音频</button>
+        <input type="file" id="customAudioFile" accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,.zip,audio/*" multiple
+            style="margin-bottom: 10px;">
+        <div style="display: flex; gap: 10px;">
+            <button id="uploadBtn" class="outline">导入音频(支持zip)</button>
+            <button id="exportAudioZipBtn" class="outline"
+                style="color: var(--primary-color); border-color: var(--primary-color);">导出ZIP备份</button>
+        </div>
         <div id="customAudioList" class="list-container" style="margin-top: 10px;"></div>
     </div>
 
@@ -399,7 +404,7 @@
             </div>
         </div>
     </div>
-
+    <script src="lib/jszip.min.js"></script>
     <script src="popup.js"></script>
 </body>
 
