@@ -55,7 +55,7 @@
                         });
                     }
                 } catch (error) {
-                    console.error("[GmgnAudioPlayer] 🚨 解析失败！", error.message);
+                    console.error("[GMGN 盯盘伴侣] 🚨 解析失败！", error.message);
                 }
             }
         });

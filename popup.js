@@ -318,7 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         await Promise.all(zipPromises); // 等待这个 ZIP 里的所有文件解压完毕
                     } catch (e) {
-                        console.error("[GmgnAudioPlayer] ZIP 解析失败:", e);
+                        console.error("[GMGN 盯盘伴侣] ZIP 解析失败:", e);
                         failCount++;
                     }
                 }
@@ -414,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 URL.revokeObjectURL(url);
                 showToast('🎉 音频包导出成功！', 3000);
             } catch (error) {
-                console.error("[GmgnAudioPlayer] ZIP 打包失败:", error);
+                console.error("[GMGN 盯盘伴侣] ZIP 打包失败:", error);
                 showToast('打包失败，请重试！');
             } finally {
                 // 恢复按钮状态

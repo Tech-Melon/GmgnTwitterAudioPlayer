@@ -11,7 +11,7 @@ chrome.runtime.onInstalled.addListener(() => {
             };
 
             chrome.storage.local.set({ twitterAudioMappings: defaultMappings }, () => {
-                console.log("[GmgnAudioPlayer] 默认映射规则初始化成功！");
+                console.log("[GMGN 盯盘伴侣] 默认映射规则初始化成功！");
             });
         }
     });

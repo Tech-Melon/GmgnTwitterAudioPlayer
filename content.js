@@ -33,7 +33,7 @@ class AudioQueue {
 
         // 异常处理：类似 Python 中捕获特定异常，避免裸奔
         this.player.onerror = (e) => {
-            console.warn("[GmgnAudioPlayer] 音频播放失败，跳过该条:", e);
+            console.warn("[GMGN 盯盘伴侣] 音频播放失败，跳过该条:", e);
             this.isPlaying = false;
             this.playNext(); // 容错：坏掉的音频不阻塞队列
         };
@@ -60,7 +60,7 @@ class AudioQueue {
         this.player.play().catch(err => {
             // 捕获浏览器自动播放限制等异常
             if (err.name !== 'NotAllowedError') {
-                console.warn("[GmgnAudioPlayer] Playback Error:", err);
+                console.warn("[GMGN 盯盘伴侣] Playback Error:", err);
             }
             this.isPlaying = false;
             this.playNext();
@@ -106,7 +106,7 @@ async function convertBase64ToBlobUrl(customAudiosObj) {
                 const blob = await res.blob();
                 audioItem.data = URL.createObjectURL(blob);
             } catch (e) {
-                console.error("[GmgnAudioPlayer] Blob 转换失败:", e);
+                console.error("[GMGN 盯盘伴侣] Blob 转换失败:", e);
             }
         }
     }
@@ -218,6 +218,6 @@ window.addEventListener('TWITTER_WS_MSG_RECEIVED', function (e) {
             }
         }
     } catch (error) {
-        console.error("[GmgnAudioPlayer] 播放异常捕获:", error);
+        console.error("[GMGN 盯盘伴侣] 播放异常捕获:", error);
     }
 });
