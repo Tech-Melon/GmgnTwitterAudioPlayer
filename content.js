@@ -27,7 +27,6 @@ function syncMasterToggle() {
 async function convertBase64ToBlobUrl(customAudiosObj) {
     for (const key in customAudiosObj) {
         const audioItem = customAudiosObj[key];
-        if (typeof audioItem.data === 'string' && audioItem.data.startsWith('blob:')) URL.revokeObjectURL(audioItem.data);
         if (typeof audioItem.data === 'string' && audioItem.data.startsWith('data:')) {
             try {
                 const res = await fetch(audioItem.data);
@@ -71,6 +70,15 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             syncMasterToggle();
         }
         if (changes.customAudios) {
+            // 🌟 终极内存闭环：在覆盖旧配置前，先释放旧的 Blob 内存
+            const oldAudios = configCache.customAudios;
+            for (const key in oldAudios) {
+                const oldData = oldAudios[key].data;
+                if (typeof oldData === 'string' && oldData.startsWith('blob:')) {
+                    URL.revokeObjectURL(oldData);
+                }
+            }
+
             configCache.customAudios = changes.customAudios.newValue || {};
             await convertBase64ToBlobUrl(configCache.customAudios);
         }
