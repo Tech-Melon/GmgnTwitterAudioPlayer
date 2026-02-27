@@ -4,7 +4,53 @@
 <head>
     <meta charset="UTF-8">
     <style>
-        /* ... 之前的 :root, body, .header 等样式全部保持不变 ... */
+        /* 🌟 极客优化：原生暗黑模式支持 (根据操作系统自动切换) */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #1c1c1e;        /* 深色背景 */
+                --card-bg: #2c2c2e;         /* 深色卡片 */
+                --text-main: #f5f5f7;       /* 亮色主文本 */
+                --text-sec: #98989d;        /* 亮色次文本 */
+            }
+
+            /* 适配输入框、下拉框在暗黑模式下的边框和背景 */
+            input[type="text"], select {
+                background: #1c1c1e;
+                color: #f5f5f7;
+                border: 1px solid #3a3a3c;
+            }
+
+            input[type="text"]:focus, select:focus {
+                border-color: var(--primary-color);
+            }
+
+            /* 适配按钮的浅色背景 */
+            .btn-icon {
+                background: #3a3a3c;
+                color: #f5f5f7;
+            }
+
+            .btn-icon:hover {
+                background: #48484a;
+            }
+
+            .btn-icon.play {
+                background: rgba(52, 199, 89, 0.15);
+            }
+            
+            .btn-icon.play:hover {
+                background: rgba(52, 199, 89, 0.25);
+            }
+
+            /* 适配搜索框和列表分割线 */
+            #searchInput {
+                background: #1c1c1e !important;
+                color: #f5f5f7;
+            }
+            .list-item {
+                border-bottom: 1px solid #3a3a3c;
+            }
+        }
         :root {
             --primary-color: #34c759;
             --bg-color: #f5f5f7;
