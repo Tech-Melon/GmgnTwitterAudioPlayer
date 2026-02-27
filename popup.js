@@ -21,7 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
         cancelEditBtn: document.getElementById('cancelEditBtn'),
         exportRulesBtn: document.getElementById('exportRulesBtn'),
         importRulesBtn: document.getElementById('importRulesBtn'),
-        importRulesFile: document.getElementById('importRulesFile')
+        importRulesFile: document.getElementById('importRulesFile'),
+        searchInput: document.getElementById('searchInput'), // 🌟 新增这行
     };
 
     function showToast(message, duration = 2000) {
@@ -87,7 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
             els.rulesList.innerHTML = '';
             let needsSave = false; // 🌟 标记是否发生了自动修复
 
-            Object.entries(mappings).forEach(([tid, audioVal]) => {
+            Object.entries(mappings)
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .forEach(([tid, audioVal]) => {
                 const isObj = typeof audioVal === 'object' && audioVal !== null;
                 let actualAudioId = isObj ? audioVal.id : audioVal;
                 let displayAudioName = isObj ? (audioVal.name || '未知音频') : audioVal;
@@ -124,7 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const div = document.createElement('div');
                 div.className = 'list-item';
-                const titleText = displayRemark ? `@${tid} (${displayRemark})` : `@${tid}`;
+                const titleText = displayRemark ? `@${tid} <span style="color: #ff9500; font-size: 11px; font-weight: normal; margin-left: 4px;">(${displayRemark})</span>` : `@${tid}`;
 
                 div.innerHTML = `
                     <div class="item-info">
@@ -185,6 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     els.importRulesBtn.addEventListener('click', () => els.importRulesFile.click());
+    // 🌟 修复：导入规则时，强制去除空格并转换为小写，防止脏数据入库
     els.importRulesFile.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -195,36 +199,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (typeof importedMappings === 'object' && importedMappings !== null) {
                     chrome.storage.local.get(['twitterAudioMappings'], (result) => {
                         const currentMappings = result.twitterAudioMappings || {};
-
-                        // 🌟 核心防重 3：精细合并，遇到重复的保留本地数据，不覆盖
                         let addedCount = 0;
                         let dupCount = 0;
+
                         for (const [key, val] of Object.entries(importedMappings)) {
-                            if (currentMappings[key]) {
-                                dupCount++; // 已存在，记为跳过
+                            // 🚀 边界清洗：绝对小写化
+                            const cleanKey = key.trim().toLowerCase();
+                            if (!cleanKey) continue;
+
+                            if (currentMappings[cleanKey]) {
+                                dupCount++;
                             } else {
-                                currentMappings[key] = val; // 不存在，安全追加
+                                currentMappings[cleanKey] = val;
                                 addedCount++;
                             }
                         }
 
                         chrome.storage.local.set({ twitterAudioMappings: currentMappings }, () => {
-                            let msg = `规则导入: 新增 ${addedCount} 条`;
+                            let msg = `导入: 新增 ${addedCount} 条`;
                             if (dupCount > 0) msg += `，跳过重复 ${dupCount} 条`;
-
                             showToast(msg, 3500);
                             els.importRulesFile.value = '';
                             loadData();
                         });
                     });
-                } else {
-                    showToast('导入失败：JSON格式错误');
                 }
             } catch (err) {
                 showToast('导入失败：无效的文件');
             }
         };
         reader.readAsText(file);
+    });
+
+    // 🌟 新增：丝滑的本地搜索过滤 (同时匹配 ID 和 备注)
+    els.searchInput.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.trim().toLowerCase();
+        const items = els.rulesList.querySelectorAll('.list-item');
+
+        items.forEach(item => {
+            // 提取每个列表项中的文字内容（包含了 ID、备注和音频名）
+            const textContent = item.querySelector('.item-info').textContent.toLowerCase();
+
+            if (textContent.includes(searchTerm)) {
+                item.style.display = 'flex'; // 匹配成功，保持原有的 flex 布局
+            } else {
+                item.style.display = 'none'; // 匹配失败，直接隐藏
+            }
+        });
     });
 
     els.globalVolume.addEventListener('input', (e) => { els.volumePercent.textContent = Math.round(e.target.value * 100) + '%'; });
