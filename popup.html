@@ -4,27 +4,24 @@
 <head>
     <meta charset="UTF-8">
     <style>
-        /* 🌟 极客优化：原生暗黑模式支持 (根据操作系统自动切换) */
         @media (prefers-color-scheme: dark) {
             :root {
-                --bg-color: #1c1c1e;        /* 深色背景 */
-                --card-bg: #2c2c2e;         /* 深色卡片 */
-                --text-main: #f5f5f7;       /* 亮色主文本 */
-                --text-sec: #98989d;        /* 亮色次文本 */
+                --bg-color: #1c1c1e;
+                --card-bg: #2c2c2e;
+                --text-main: #f5f5f7;
+                --text-sec: #98989d;
             }
 
-            /* 适配输入框、下拉框在暗黑模式下的边框和背景 */
-            input[type="text"], select {
+            input[type="text"] {
                 background: #1c1c1e;
                 color: #f5f5f7;
                 border: 1px solid #3a3a3c;
             }
 
-            input[type="text"]:focus, select:focus {
+            input[type="text"]:focus {
                 border-color: var(--primary-color);
             }
 
-            /* 适配按钮的浅色背景 */
             .btn-icon {
                 background: #3a3a3c;
                 color: #f5f5f7;
@@ -37,20 +34,31 @@
             .btn-icon.play {
                 background: rgba(52, 199, 89, 0.15);
             }
-            
+
             .btn-icon.play:hover {
                 background: rgba(52, 199, 89, 0.25);
             }
 
-            /* 适配搜索框和列表分割线 */
             #searchInput {
                 background: #1c1c1e !important;
                 color: #f5f5f7;
             }
+
             .list-item {
                 border-bottom: 1px solid #3a3a3c;
             }
+
+            /* 深色模式下的下拉框适配 */
+            .custom-dropdown-menu {
+                background: #2c2c2e !important;
+                border-color: #3a3a3c !important;
+            }
+
+            .custom-dropdown-item:hover {
+                background: #3a3a3c !important;
+            }
         }
+
         :root {
             --primary-color: #34c759;
             --bg-color: #f5f5f7;
@@ -192,8 +200,7 @@
             font-weight: 500;
         }
 
-        input[type="text"],
-        select {
+        input[type="text"] {
             width: 100%;
             padding: 10px;
             margin-bottom: 10px;
@@ -205,8 +212,7 @@
             transition: border 0.2s;
         }
 
-        input[type="text"]:focus,
-        select:focus {
+        input[type="text"]:focus {
             border-color: var(--primary-color);
         }
 
@@ -239,7 +245,6 @@
             border: 1px solid #d2d2d7;
         }
 
-        /* 🌟 新增：滚动列表容器与丝滑滚动条 */
         .list-container {
             max-height: 220px;
             overflow-y: auto;
@@ -324,6 +329,105 @@
             background: #d4f1db;
         }
 
+        /* 🌟 事件过滤复选框样式 */
+        .filter-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .filter-group label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+
+        .filter-group input[type="checkbox"] {
+            margin: 0;
+            cursor: pointer;
+            accent-color: var(--primary-color);
+        }
+
+        /* 🌟 极客版可搜索下拉框组件 CSS */
+        .custom-select {
+            position: relative;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .custom-select-trigger {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 14px;
+            background: transparent;
+            cursor: pointer;
+            text-align: left;
+            color: var(--text-main);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .custom-dropdown-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            width: 100%;
+            background: #ffffff;
+            border: 1px solid var(--primary-color);
+            border-radius: 8px;
+            z-index: 999;
+            margin-top: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            display: none;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        .custom-dropdown-menu.show {
+            display: block;
+        }
+
+        .custom-dropdown-search {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d2d2d7;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .custom-dropdown-list {
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .custom-dropdown-list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .custom-dropdown-list::-webkit-scrollbar-thumb {
+            background: #d2d2d7;
+            border-radius: 2px;
+        }
+
+        .custom-dropdown-item {
+            padding: 8px;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .custom-dropdown-item:hover {
+            background: #f2f2f7;
+            color: var(--primary-color);
+        }
+
         #toast {
             position: fixed;
             top: 16px;
@@ -399,16 +503,31 @@
     </div>
 
     <div class="card">
+        <h4>监听事件类型</h4>
+        <div class="filter-group">
+            <label><input type="checkbox" id="filterTweet" checked> 推文</label>
+            <label><input type="checkbox" id="filterRepost" checked> 转发</label>
+            <label><input type="checkbox" id="filterReply" checked> 回复</label>
+            <label><input type="checkbox" id="filterQuote" checked> 引用</label>
+            <label><input type="checkbox" id="filterOther" checked> 其他(置顶/头像等)</label>
+        </div>
+    </div>
+
+    <div class="card">
         <h4>添加映射规则</h4>
         <input type="text" id="twitterId" placeholder="输入 Twitter ID (如: binance)">
         <input type="text" id="twitterRemark" placeholder="备注 (选填，如: 币安官推)">
-        <select id="audioSelect">
-            <option value="default.MP3">默认提示音</option>
-            <option value="preset1.MP3">预设音 1</option>
-            <option value="elonmusk.MP3">马斯克专属</option>
-            <option value="cz.MP3">CZ专属</option>
-            <option value="heyi.MP3">何一专属</option>
-        </select>
+
+        <div class="custom-select" id="addSelectWrapper">
+            <button class="custom-select-trigger" id="addSelectTrigger"><span>默认提示音</span> ▾</button>
+            <input type="hidden" id="addAudioValue" value="default.MP3">
+            <input type="hidden" id="addAudioName" value="默认提示音">
+            <div class="custom-dropdown-menu" id="addSelectMenu">
+                <input type="text" class="custom-dropdown-search" id="addSelectSearch" placeholder="搜索音频名称...">
+                <div class="custom-dropdown-list" id="addSelectList"></div>
+            </div>
+        </div>
+
         <button id="addRuleBtn">添加映射</button>
     </div>
 
@@ -437,10 +556,8 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h4 style="margin: 0;">当前生效规则</h4>
         </div>
-    
         <input type="text" id="searchInput" placeholder="🔍 搜索推特 ID 或备注..."
             style="margin-bottom: 12px; background: #f2f2f7; border: none; padding: 8px 12px; border-radius: 8px; font-size: 13px;">
-    
         <div id="rulesList" class="list-container"></div>
     </div>
 
@@ -449,7 +566,17 @@
             <h3>编辑规则</h3>
             <input type="text" id="editTwitterId" readonly style="background:#f5f5f7; color:var(--text-sec)">
             <input type="text" id="editTwitterRemark" placeholder="备注 (选填)">
-            <select id="editAudioSelect"></select>
+
+            <div class="custom-select" id="editSelectWrapper">
+                <button class="custom-select-trigger" id="editSelectTrigger"><span>默认提示音</span> ▾</button>
+                <input type="hidden" id="editAudioValue" value="default.MP3">
+                <input type="hidden" id="editAudioName" value="默认提示音">
+                <div class="custom-dropdown-menu" id="editSelectMenu">
+                    <input type="text" class="custom-dropdown-search" id="editSelectSearch" placeholder="搜索音频名称...">
+                    <div class="custom-dropdown-list" id="editSelectList"></div>
+                </div>
+            </div>
+
             <div class="modal-actions">
                 <button id="cancelEditBtn" class="outline">取消</button>
                 <button id="saveEditBtn">保存</button>

@@ -4,10 +4,10 @@ script.onload = function () { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 
 let configCache = {
-    mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0
+    mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0,
+    eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true } // 🌟 加入 other
 };
 
-// 🌟 修复：增加挂起队列。防止 WS 消息比数据库读取还要快
 let isCacheReady = false;
 let pendingWsMessages = [];
 const audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
@@ -39,11 +39,15 @@ async function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume'], async (result) => {
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters'], async (result) => {
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
+
+    // 🌟 读取时加入 eventFilters
+    if (result.eventFilters) configCache.eventFilters = result.eventFilters;
+    if (configCache.eventFilters.other === undefined) configCache.eventFilters.other = true; // 老数据兼容
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
@@ -53,9 +57,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     syncMasterToggle();
     isCacheReady = true;
 
-    // 🌟 触发积压的消息
     if (pendingWsMessages.length > 0) {
-        console.log(`[GMGN 盯盘伴侣] 数据库就绪，开始处理 ${pendingWsMessages.length} 条开局暂存消息...`);
         pendingWsMessages.forEach(processTwitterMessage);
         pendingWsMessages = [];
     }
@@ -65,12 +67,12 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
     if (namespace === 'local') {
         if (changes.twitterAudioMappings) configCache.mappings = changes.twitterAudioMappings.newValue || {};
         if (changes.globalVolume) configCache.globalVolume = changes.globalVolume.newValue;
+        if (changes.eventFilters) configCache.eventFilters = changes.eventFilters.newValue;
         if (changes.isMasterEnabled) {
             configCache.isMasterEnabled = changes.isMasterEnabled.newValue;
             syncMasterToggle();
         }
         if (changes.customAudios) {
-            // 🌟 终极内存闭环：在覆盖旧配置前，先释放旧的 Blob 内存
             const oldAudios = configCache.customAudios;
             for (const key in oldAudios) {
                 const oldData = oldAudios[key].data;
@@ -78,7 +80,6 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
                     URL.revokeObjectURL(oldData);
                 }
             }
-
             configCache.customAudios = changes.customAudios.newValue || {};
             await convertBase64ToBlobUrl(configCache.customAudios);
         }
@@ -90,7 +91,9 @@ let globalLastPlayTime = 0;
 
 function processTwitterMessage(e) {
     if (Object.keys(lastPlayTime).length > 1000) lastPlayTime = {};
-    if (!e.detail || !Array.isArray(e.detail.twitterIds)) return;
+
+    // 🌟 彻底修复接收格式，必须是 triggers 数组
+    if (!e.detail || !Array.isArray(e.detail.triggers)) return;
 
     const now = Date.now();
     let vipAudioSrc = null;
@@ -99,9 +102,21 @@ function processTwitterMessage(e) {
     let isVipPresent = false;
     let matchedVipName = "无";
 
-    e.detail.twitterIds.forEach(rawId => {
-        if (typeof rawId !== 'string') return;
-        const twitterId = rawId.trim().toLowerCase();
+    e.detail.triggers.forEach(trigger => {
+        if (!trigger || typeof trigger.id !== 'string') return;
+
+        const twitterId = trigger.id.trim().toLowerCase();
+        const rawActionType = trigger.tw;
+
+        // 🌟 方案 B 的灵魂兜底逻辑：不是四大类的，全是 other
+        const knownTypes = ['tweet', 'repost', 'reply', 'quote'];
+        const actionType = knownTypes.includes(rawActionType) ? rawActionType : 'other';
+
+        if (configCache.eventFilters && configCache.eventFilters[actionType] === false) {
+            console.log(`[GMGN 盯盘伴侣] 🛑 已拦截过滤事件: ${rawActionType} -> @${twitterId}`);
+            return;
+        }
+
         const rule = configCache.mappings[twitterId];
         const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
 
@@ -126,45 +141,28 @@ function processTwitterMessage(e) {
         }
     });
 
-    // 🌟 增加核心 Debug 日志
-    console.log(`[GMGN 盯盘伴侣] 解析推文动作 -> 推特ID: ${e.detail.twitterIds.join(',')}, 是否大V: ${isVipPresent} (${matchedVipName})`);
-
-    // 🌟 核心播放函数：每次调用都生成独立的音频流，实现无阻塞并发混音
     const playConcurrentAudio = (src) => {
         const player = new Audio(src);
         player.volume = configCache.globalVolume;
         player.play().catch(err => {
-            if (err.name === 'NotAllowedError') {
-                console.warn("⚠️ [GMGN 盯盘伴侣] 浏览器拦截了自动播放！请随便点击一下页面的空白处来激活音频权限。");
-            } else {
-                console.warn("[GMGN 盯盘伴侣] Playback Error:", err);
-            }
+            if (err.name !== 'NotAllowedError') console.warn("[GMGN 盯盘伴侣] Playback Error:", err);
         });
     };
 
     try {
         if (vipAudioSrc) {
-            console.log(`[GMGN 盯盘伴侣] 🔊 触发大V专属音频 (并发混音)...`);
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             playConcurrentAudio(vipAudioSrc);
-
         } else if (vipFallbackDefault) {
-            console.log(`[GMGN 盯盘伴侣] 🔊 大V降级默认音 (并发混音)...`);
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
-
         } else if (nobodyWantsDefault && !isVipPresent) {
-            // 🛑 纯路人局：依然保留 2 秒的大盘全局防噪过滤
-            // 避免短时间内几百个路人同时发推把扬声器震破
             if (now - globalLastPlayTime > 2000) {
-                console.log(`[GMGN 盯盘伴侣] 🔊 触发纯路人默认音频 (并发混音)...`);
                 globalLastPlayTime = now;
                 audioSyncChannel.postMessage('PLAYING_AUDIO');
                 playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
-            } else {
-                console.log(`[GMGN 盯盘伴侣] 🛑 拦截路人音频: 距上次发声不足2秒，触发防噪机制。`);
             }
         }
     } catch (error) {
@@ -174,12 +172,9 @@ function processTwitterMessage(e) {
 
 window.addEventListener('TWITTER_WS_MSG_RECEIVED', function (e) {
     if (!configCache.isMasterEnabled || isLockedByOtherTab) return;
-
     if (!isCacheReady) {
-        // 🌟 将读取数据库前就到达的推文暂存起来，而不是抛弃
         pendingWsMessages.push(e);
         return;
     }
-
     processTwitterMessage(e);
 });
