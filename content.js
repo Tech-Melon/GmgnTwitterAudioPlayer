@@ -5,8 +5,46 @@ script.onload = function () { this.remove(); };
 
 let configCache = {
     mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0,
-    eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true } // 🌟 加入 other
+    eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true }
 };
+
+// 🌟 新增核心：极速内存预热引擎
+let preloadedAudios = new Map();
+
+function warmupAudio(src) {
+    if (!src) return;
+    if (!preloadedAudios.has(src)) {
+        const audio = new Audio();
+        audio.preload = 'auto'; // 强制浏览器在后台拉取并立刻解码音频
+        audio.src = src;
+        audio.load();           // 将音频载入驻留内存
+        preloadedAudios.set(src, audio);
+    }
+}
+
+// 🌟 将所有可能播放的音频提前灌入内存池
+function initPreloadCache() {
+    preloadedAudios.clear();
+
+    // 1. 预热默认提示音
+    warmupAudio(chrome.runtime.getURL(configCache.defaultAudio));
+
+    // 2. 预热自定义音频 (高速 Blob 链接)
+    for (const key in configCache.customAudios) {
+        const audioItem = configCache.customAudios[key];
+        if (audioItem && audioItem.data) warmupAudio(audioItem.data);
+    }
+
+    // 3. 预热扩展内置的预设音频
+    for (const key in configCache.mappings) {
+        const rule = configCache.mappings[key];
+        const audioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
+        if (audioId && !audioId.startsWith('custom_')) {
+            warmupAudio(chrome.runtime.getURL(`sounds/${audioId}`));
+        }
+    }
+    console.log("🚀 [GMGN 盯盘伴侣] 音频底座预热完成，进入 0 毫秒响应待命状态！");
+}
 
 let isCacheReady = false;
 let pendingWsMessages = [];
@@ -45,14 +83,16 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
 
-    // 🌟 读取时加入 eventFilters
     if (result.eventFilters) configCache.eventFilters = result.eventFilters;
-    if (configCache.eventFilters.other === undefined) configCache.eventFilters.other = true; // 老数据兼容
+    if (configCache.eventFilters.other === undefined) configCache.eventFilters.other = true;
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
         await convertBase64ToBlobUrl(configCache.customAudios);
     }
+
+    // 🌟 在数据加载完毕后，立刻执行预热
+    initPreloadCache();
 
     syncMasterToggle();
     isCacheReady = true;
@@ -65,7 +105,12 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 
 chrome.storage.onChanged.addListener(async (changes, namespace) => {
     if (namespace === 'local') {
-        if (changes.twitterAudioMappings) configCache.mappings = changes.twitterAudioMappings.newValue || {};
+        let needsPreload = false;
+
+        if (changes.twitterAudioMappings) {
+            configCache.mappings = changes.twitterAudioMappings.newValue || {};
+            needsPreload = true;
+        }
         if (changes.globalVolume) configCache.globalVolume = changes.globalVolume.newValue;
         if (changes.eventFilters) configCache.eventFilters = changes.eventFilters.newValue;
         if (changes.isMasterEnabled) {
@@ -82,6 +127,12 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             }
             configCache.customAudios = changes.customAudios.newValue || {};
             await convertBase64ToBlobUrl(configCache.customAudios);
+            needsPreload = true;
+        }
+
+        // 🌟 配置有任何变动，立刻重新刷新预热池
+        if (needsPreload) {
+            initPreloadCache();
         }
     }
 });
@@ -91,8 +142,6 @@ let globalLastPlayTime = 0;
 
 function processTwitterMessage(e) {
     if (Object.keys(lastPlayTime).length > 1000) lastPlayTime = {};
-
-    // 🌟 彻底修复接收格式，必须是 triggers 数组
     if (!e.detail || !Array.isArray(e.detail.triggers)) return;
 
     const now = Date.now();
@@ -108,14 +157,10 @@ function processTwitterMessage(e) {
         const twitterId = trigger.id.trim().toLowerCase();
         const rawActionType = trigger.tw;
 
-        // 🌟 方案 B 的灵魂兜底逻辑：不是四大类的，全是 other
         const knownTypes = ['tweet', 'repost', 'reply', 'quote'];
         const actionType = knownTypes.includes(rawActionType) ? rawActionType : 'other';
 
-        if (configCache.eventFilters && configCache.eventFilters[actionType] === false) {
-            console.log(`[GMGN 盯盘伴侣] 🛑 已拦截过滤事件: ${rawActionType} -> @${twitterId}`);
-            return;
-        }
+        if (configCache.eventFilters && configCache.eventFilters[actionType] === false) return;
 
         const rule = configCache.mappings[twitterId];
         const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
@@ -141,8 +186,16 @@ function processTwitterMessage(e) {
         }
     });
 
+    // 🌟 核心提速：从内存池中快速克隆，跳过繁重的解码和网络IO过程
     const playConcurrentAudio = (src) => {
-        const player = new Audio(src);
+        let player;
+        if (preloadedAudios.has(src)) {
+            // cloneNode(true) 能以微秒级速度直接拷贝已解码的音频节点结构
+            player = preloadedAudios.get(src).cloneNode(true);
+        } else {
+            // 如果缓存未命中，安全兜底降级到传统模式
+            player = new Audio(src);
+        }
         player.volume = configCache.globalVolume;
         player.play().catch(err => {
             if (err.name !== 'NotAllowedError') console.warn("[GMGN 盯盘伴侣] Playback Error:", err);
