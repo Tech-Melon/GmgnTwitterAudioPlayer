@@ -104,6 +104,8 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 });
 
 chrome.storage.onChanged.addListener(async (changes, namespace) => {
+    // 增加防御性校验：如果上下文已丢失，直接阻断后续的异步逻辑
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
     if (namespace === 'local') {
         let needsPreload = false;
 
@@ -219,15 +221,40 @@ function processTwitterMessage(e) {
             }
         }
     } catch (error) {
+        // 🌟 核心修复：如果是上下文失效异常，拒绝吞没，直接向上抛出给外层清理器
+        if (error instanceof Error && error.message.includes('Extension context invalidated')) {
+            throw error;
+        }
         console.error("[GMGN 盯盘伴侣] 播放异常捕获:", error);
     }
 }
 
-window.addEventListener('TWITTER_WS_MSG_RECEIVED', function (e) {
+function handleTwitterMsg(e) {
+    // 1. 前置拦截：精准判断扩展上下文是否已丢失
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+        console.warn("👻 [GMGN 盯盘伴侣] 扩展已更新，旧上下文失效，正在清理遗留监听器。");
+        window.removeEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
+        if (typeof audioSyncChannel !== 'undefined') audioSyncChannel.close(); // 🔪 彻底切断通信频道
+        return;
+    }
+
     if (!configCache.isMasterEnabled || isLockedByOtherTab) return;
     if (!isCacheReady) {
         pendingWsMessages.push(e);
         return;
     }
-    processTwitterMessage(e);
-});
+
+    try {
+        processTwitterMessage(e);
+    } catch (error) {
+        // 2. 精准异常捕获：只拦截上下文失效引发的错误，不掩盖其他真实 Bug
+        if (error instanceof Error && error.message.includes('Extension context invalidated')) {
+            window.removeEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
+            if (typeof audioSyncChannel !== 'undefined') audioSyncChannel.close();
+        } else {
+            console.error("[GMGN 盯盘伴侣] 播放异常捕获:", error);
+        }
+    }
+}
+
+window.addEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);

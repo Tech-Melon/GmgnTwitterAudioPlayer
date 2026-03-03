@@ -1,5 +1,5 @@
 (function () {
-    console.log("🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (v1.2.0 专注主动发推版)");
+    console.log("🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (v1.2.1)");
 
     const OriginalWebSocket = window.WebSocket;
 
