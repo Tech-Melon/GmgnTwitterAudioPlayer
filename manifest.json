@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "GMGN 盯盘伴侣",
-    "version": "1.2.1",
+    "version": "1.2.5",
     "description": "高度可定制的GMGN twitter音频播报插件(X: 0xTechMelon)",
     "icons": {
         "16": "images/icon16.png",

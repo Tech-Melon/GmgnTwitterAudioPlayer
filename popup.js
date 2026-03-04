@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const els = {
         masterToggle: document.getElementById('masterToggle'),
+        playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
         globalVolume: document.getElementById('globalVolume'),
         volumePercent: document.getElementById('volumePercent'),
         uploadBtn: document.getElementById('uploadBtn'),
@@ -96,7 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function loadData() {
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters'], (result) => {
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped'], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
 
@@ -104,6 +105,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const filters = result.eventFilters || { tweet: true, repost: true, reply: true, quote: true, other: true };
 
             els.masterToggle.checked = result.isMasterEnabled !== false;
+            // 🌟 默认勾选，所以当 undefined 时也为 true
+            els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.filterTweet.checked = filters.tweet !== false;
             els.filterRepost.checked = filters.repost !== false;
             els.filterReply.checked = filters.reply !== false;
@@ -318,14 +321,23 @@ document.addEventListener('DOMContentLoaded', () => {
     els.globalVolume.addEventListener('input', (e) => { els.volumePercent.textContent = Math.round(e.target.value * 100) + '%'; });
     els.globalVolume.addEventListener('change', (e) => { chrome.storage.local.set({ globalVolume: parseFloat(e.target.value) }); });
     els.masterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ isMasterEnabled: e.target.checked }, () => { showToast(e.target.checked ? '监听已开启' : '监听已暂停'); }); });
-
+    els.playDefaultToggle.addEventListener('change', (e) => {
+        chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
+            // 🌟 原文：showToast(e.target.checked ? '未映射将播放默认音' : '未映射将静默推送');
+            showToast(e.target.checked ? '已开启默认音频' : '已关闭默认音频');
+        });
+    });
     els.uploadBtn.addEventListener('click', async () => {
         const files = els.customAudioFile.files;
         if (!files || files.length === 0) return showToast('请先选择音频或 ZIP！');
         const allowedExtensions = ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'flac'];
         let successCount = 0, failCount = 0, duplicateCount = 0;
-        els.uploadBtn.textContent = '解包中...';
+
+        els.uploadBtn.textContent = '解包处理中...';
         els.uploadBtn.disabled = true;
+
+        // 🌟 技巧 1：强制让出主线程 50ms，确保“解包处理中...”的 UI 渲染出来
+        await new Promise(resolve => setTimeout(resolve, 50));
 
         chrome.storage.local.get(['customAudios'], async (result) => {
             const customAudios = result.customAudios || {};
@@ -335,7 +347,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 else { customAudios[customId] = { name: fileName, data: base64Data }; successCount++; }
             };
 
-            const readPromises = Array.from(files).map(async (file) => {
+            // 🌟 技巧 2：将并行的 Promise.all 改为串行 await，防止瞬间撑爆内存
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
                 const fileName = file.name;
                 const fileExt = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase();
 
@@ -343,32 +357,37 @@ document.addEventListener('DOMContentLoaded', () => {
                     try {
                         const zip = new JSZip();
                         const loadedZip = await zip.loadAsync(file);
-                        const zipPromises = [];
+
+                        // 先收集所有有效的压缩包文件条目
+                        const zipEntries = [];
                         loadedZip.forEach((relativePath, zipEntry) => {
                             if (zipEntry.dir || relativePath.includes('__MACOSX') || relativePath.split('/').pop().startsWith('.')) return;
                             const entryExt = relativePath.substring(relativePath.lastIndexOf('.') + 1).toLowerCase();
-                            if (!allowedExtensions.includes(entryExt)) return;
-
-                            const p = zipEntry.async('base64').then(base64Content => {
-                                let mimeType = `audio/${entryExt}`;
-                                if (entryExt === 'mp3') mimeType = 'audio/mpeg';
-                                processAudioData(relativePath.split('/').pop(), `data:${mimeType};base64,${base64Content}`);
-                            });
-                            zipPromises.push(p);
+                            if (allowedExtensions.includes(entryExt)) zipEntries.push({ relativePath, zipEntry, entryExt });
                         });
-                        await Promise.all(zipPromises);
+
+                        // 逐个解析 Base64，避免并发过高
+                        for (let j = 0; j < zipEntries.length; j++) {
+                            const entry = zipEntries[j];
+                            const base64Content = await entry.zipEntry.async('base64');
+                            let mimeType = `audio/${entry.entryExt}`;
+                            if (entry.entryExt === 'mp3') mimeType = 'audio/mpeg';
+                            processAudioData(entry.relativePath.split('/').pop(), `data:${mimeType};base64,${base64Content}`);
+
+                            // 🌟 技巧 3：每处理完一个文件，呼吸一次，防止假死
+                            await new Promise(resolve => setTimeout(resolve, 0));
+                        }
                     } catch (e) { failCount++; }
                 } else if (allowedExtensions.includes(fileExt)) {
-                    return new Promise((resolve) => {
+                    await new Promise((resolve) => {
                         const reader = new FileReader();
                         reader.onload = function (e) { processAudioData(fileName, e.target.result); resolve(); };
                         reader.onerror = () => { failCount++; resolve(); };
                         reader.readAsDataURL(file);
                     });
                 } else failCount++;
-            });
+            }
 
-            await Promise.all(readPromises);
             chrome.storage.local.set({ customAudios }, () => {
                 showToast(`导入: ${successCount}个，已存在跳过: ${duplicateCount}个`, 3500);
                 els.customAudioFile.value = '';
@@ -388,23 +407,40 @@ document.addEventListener('DOMContentLoaded', () => {
             els.exportAudioZipBtn.textContent = '打包中...';
             els.exportAudioZipBtn.disabled = true;
 
+            // 🌟 同样先让出主线程，刷新 UI
+            await new Promise(resolve => setTimeout(resolve, 50));
+
             try {
                 const zip = new JSZip();
                 const folder = zip.folder("GmgnAudio_Backup");
-                for (const id of keys) {
+
+                // 串行压入文件
+                for (let i = 0; i < keys.length; i++) {
+                    const id = keys[i];
                     const audioObj = customAudios[id];
                     const fileName = typeof audioObj === 'object' ? audioObj.name : `${id}.mp3`;
                     const base64Content = (typeof audioObj === 'object' ? audioObj.data : audioObj).split(',')[1];
                     if (base64Content) folder.file(fileName, base64Content, { base64: true });
+
+                    // 每压入 5 个文件，让主线程呼吸一次
+                    if (i % 5 === 0) await new Promise(resolve => setTimeout(resolve, 0));
                 }
-                const zipBlob = await zip.generateAsync({ type: 'blob' });
+
+                // 🌟 技巧 4：compression: "STORE" 是降维打击！
+                // 音频本就压缩过，强行 DEFLATE 浪费极其严重的 CPU，改为 STORE 直接打包存储，速度飞起！
+                const zipBlob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: "STORE"
+                });
+
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(zipBlob);
                 a.download = `Gmgn音频备份_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.zip`;
                 a.click();
                 showToast('🎉 导出成功！', 3000);
-            } catch (error) { showToast('打包失败！'); }
-            finally {
+            } catch (error) {
+                showToast('打包失败！');
+            } finally {
                 els.exportAudioZipBtn.textContent = '导出ZIP备份';
                 els.exportAudioZipBtn.disabled = false;
             }

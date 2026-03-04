@@ -503,6 +503,16 @@
     </div>
 
     <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h4 style="margin: 0;">播放默认音频</h4>
+            <label class="switch">
+                <input type="checkbox" id="playDefaultToggle" checked>
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+
+    <div class="card">
         <h4>监听事件类型</h4>
         <div class="filter-group">
             <label><input type="checkbox" id="filterTweet" checked> 推文</label>
@@ -514,7 +524,7 @@
     </div>
 
     <div class="card">
-        <h4>添加映射规则</h4>
+        <h4>设置专属提示音</h4>
         <input type="text" id="twitterId" placeholder="输入 Twitter ID (如: binance)">
         <input type="text" id="twitterRemark" placeholder="备注 (选填，如: 币安官推)">
 
@@ -528,7 +538,7 @@
             </div>
         </div>
 
-        <button id="addRuleBtn">添加映射</button>
+        <button id="addRuleBtn">添加专属音</button>
     </div>
 
     <div class="card">
@@ -554,7 +564,7 @@
 
     <div class="card" style="margin-bottom: 0;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h4 style="margin: 0;">当前生效规则</h4>
+            <h4 style="margin: 0;">已设置的专属音</h4>
         </div>
         <input type="text" id="searchInput" placeholder="🔍 搜索推特 ID 或备注..."
             style="margin-bottom: 12px; background: #f2f2f7; border: none; padding: 8px 12px; border-radius: 8px; font-size: 13px;">

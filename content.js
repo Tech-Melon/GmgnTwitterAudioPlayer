@@ -5,7 +5,8 @@ script.onload = function () { this.remove(); };
 
 let configCache = {
     mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0,
-    eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true }
+    eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true },
+    playDefaultUnmapped: true // 🌟 新增开关缓存，默认开启
 };
 
 // 🌟 新增核心：极速内存预热引擎
@@ -24,6 +25,12 @@ function warmupAudio(src) {
 
 // 🌟 将所有可能播放的音频提前灌入内存池
 function initPreloadCache() {
+    // 🌟 核心修复 1：彻底销毁旧的 Audio 实例，防止内存泄漏和解码器堆积
+    preloadedAudios.forEach((audio) => {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load(); // 强制浏览器切断底层音频流的占用
+    });
     preloadedAudios.clear();
 
     // 1. 预热默认提示音
@@ -77,7 +84,7 @@ async function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters'], async (result) => {
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped'], async (result) => { // 🌟 数组加了 'playDefaultUnmapped'
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
@@ -85,6 +92,9 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 
     if (result.eventFilters) configCache.eventFilters = result.eventFilters;
     if (configCache.eventFilters.other === undefined) configCache.eventFilters.other = true;
+
+    // 🌟 赋值缓存
+    if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
@@ -118,6 +128,10 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.isMasterEnabled) {
             configCache.isMasterEnabled = changes.isMasterEnabled.newValue;
             syncMasterToggle();
+        }
+        // 🌟 监听开关变动更新缓存
+        if (changes.playDefaultUnmapped) {
+            configCache.playDefaultUnmapped = changes.playDefaultUnmapped.newValue;
         }
         if (changes.customAudios) {
             const oldAudios = configCache.customAudios;
@@ -199,8 +213,24 @@ function processTwitterMessage(e) {
             player = new Audio(src);
         }
         player.volume = configCache.globalVolume;
+
+        // 🌟 核心修复 2：用完即焚！监听播放结束事件，彻底释放克隆节点
+        const cleanup = () => {
+            if (!player) return;
+            player.pause();
+            player.removeAttribute('src');
+            player.load(); // 释放解码器
+            player.removeEventListener('ended', cleanup);
+            player.removeEventListener('error', cleanup);
+            player = null; // 切断 JS 引用，立刻交由 GC 回收
+        };
+
+        player.addEventListener('ended', cleanup);
+        player.addEventListener('error', cleanup);
+
         player.play().catch(err => {
             if (err.name !== 'NotAllowedError') console.warn("[GMGN 盯盘伴侣] Playback Error:", err);
+            cleanup(); // 如果播放被拦截或失败，也立刻执行销毁
         });
     };
 
@@ -210,11 +240,13 @@ function processTwitterMessage(e) {
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             playConcurrentAudio(vipAudioSrc);
         } else if (vipFallbackDefault) {
+            // 降级情况：文件丢失被迫使用默认音 (不受新开关影响，照常播放)
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
         } else if (nobodyWantsDefault && !isVipPresent) {
-            if (now - globalLastPlayTime > 2000) {
+            // 🌟 新增判断：只有当允许播放未映射音频，且距离上次播放大于2秒时，才播放
+            if (configCache.playDefaultUnmapped && (now - globalLastPlayTime > 2000)) {
                 globalLastPlayTime = now;
                 audioSyncChannel.postMessage('PLAYING_AUDIO');
                 playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
