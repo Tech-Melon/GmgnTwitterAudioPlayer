@@ -1,5 +1,6 @@
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('inject.js') + '?v=' + Date.now();
+script.dataset.extVersion = chrome.runtime.getManifest().version;
 script.onload = function () { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 

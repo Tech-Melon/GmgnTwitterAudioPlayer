@@ -1,5 +1,9 @@
 (function () {
-    console.log("🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (v1.2.5)");
+    // 🌟 新增：读取注入当前脚本的 script 标签上的版本号
+    const version = document.currentScript ? document.currentScript.dataset.extVersion : '未知版本';
+
+    // 动态拼接版本号
+    console.log(`🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (v${version})`);
 
     const OriginalWebSocket = window.WebSocket;
 
