@@ -319,7 +319,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                     });
                 }
-            } catch (err) { showToast('导入失败：无效的文件'); }
+            } catch (err) {
+                showToast('导入失败：无效的文件');
+                els.importRulesFile.value = '';
+            }
         };
         reader.readAsText(file);
     });
