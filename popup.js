@@ -449,7 +449,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 🌟 修复：使用新的下拉框引擎读取数值
     els.addRuleBtn.addEventListener('click', () => {
-        const tid = els.twitterIdInput.value.trim().toLowerCase();
+        const tid = els.twitterIdInput.value.trim().toLowerCase().replace(/^@/, '');
         const remark = els.twitterRemarkInput.value.trim();
         const selectedAudioId = document.getElementById('addAudioValue').value;
         const selectedAudioName = document.getElementById('addAudioName').value.replace('🎵 ', '');
@@ -477,7 +477,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     els.saveEditBtn.addEventListener('click', () => {
-        const tid = els.editTwitterId.value;
+        const tid = els.editTwitterId.value.trim().toLowerCase().replace(/^@/, '');
         const remark = els.editTwitterRemark.value.trim();
         const selectedAudioId = document.getElementById('editAudioValue').value;
         const selectedAudioName = document.getElementById('editAudioName').value.replace('🎵 ', '');
