@@ -12,6 +12,7 @@ let configCache = {
 
 // 🌟 新增核心：极速内存预热引擎
 let preloadedAudios = new Map();
+let isRebuildingBlob = false; // 🌟 新增：全局 Blob 重建锁
 
 function warmupAudio(src) {
     if (!src) return;
@@ -24,13 +25,34 @@ function warmupAudio(src) {
     }
 }
 
+// 🌟 优化：保持严谨的异常处理边界
+function checkAudioHealth(audio) {
+    if (!audio) return false;
+
+    try {
+        return audio.readyState >= 2 && audio.networkState !== 3;
+    } catch (error) {
+        // 仅捕获预期的 DOM 异常或类型异常
+        if (error instanceof TypeError || error instanceof DOMException) {
+            console.warn("⚠️ [GMGN 盯盘伴侣] 音频节点状态异常 (预期内):", error.name);
+            return false;
+        }
+        // 未知系统级异常，绝不生吞，直接抛出
+        throw error;
+    }
+}
+
 // 🌟 将所有可能播放的音频提前灌入内存池
 function initPreloadCache() {
     // 🌟 核心修复 1：彻底销毁旧的 Audio 实例，防止内存泄漏和解码器堆积
     preloadedAudios.forEach((audio) => {
-        audio.pause();
-        audio.removeAttribute('src');
-        audio.load(); // 强制浏览器切断底层音频流的占用
+        try {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load(); // 强制浏览器切断底层音频流的占用
+        } catch (e) {
+            console.warn("⚠️ [GMGN 盯盘伴侣] 清理旧音频实例时出错:", e);
+        }
     });
     preloadedAudios.clear();
 
@@ -56,7 +78,7 @@ function initPreloadCache() {
 
 let isCacheReady = false;
 let pendingWsMessages = [];
-const audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
+let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
 let isLockedByOtherTab = false;
 
 audioSyncChannel.onmessage = (event) => {
@@ -65,6 +87,62 @@ audioSyncChannel.onmessage = (event) => {
         setTimeout(() => { isLockedByOtherTab = false; }, 2000);
     }
 };
+
+// 🌟 优化：仅在真正的休眠恢复时重新初始化（避免标签页切换时的性能浪费）
+let lastVisibilityState = document.visibilityState;
+let lastVisibilityChangeTime = Date.now();
+
+document.addEventListener('visibilitychange', () => {
+    const now = Date.now();
+    const hiddenDuration = now - lastVisibilityChangeTime;
+    
+    // 只有当页面隐藏超过 5 分钟（300000ms）才认为可能是休眠，否则只是普通的标签切换
+    if (lastVisibilityState === 'hidden' && document.visibilityState === 'visible' && hiddenDuration > 300000) {
+        console.log("🔄 [GMGN 盯盘伴侣] 检测到长时间休眠恢复，正在重新初始化音频系统...");
+        
+        // 重新创建 BroadcastChannel（可能已断开）
+        try {
+            audioSyncChannel.close();
+        } catch (e) {}
+        audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
+        audioSyncChannel.onmessage = (event) => {
+            if (event.data === 'PLAYING_AUDIO') {
+                isLockedByOtherTab = true;
+                setTimeout(() => { isLockedByOtherTab = false; }, 2000);
+            }
+        };
+        
+        // 重新加载配置并预热音频
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped'], async (result) => {
+            if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
+            if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
+            if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
+            if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
+            if (result.eventFilters) configCache.eventFilters = result.eventFilters;
+            if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
+            
+            if (result.customAudios) {
+                // 🔥 关键修复：回收旧的 Blob URL，防止内存泄漏
+                for (const key in configCache.customAudios) {
+                    const oldData = configCache.customAudios[key].data;
+                    if (typeof oldData === 'string' && oldData.startsWith('blob:')) {
+                        URL.revokeObjectURL(oldData);
+                    }
+                }
+                
+                configCache.customAudios = result.customAudios;
+                await convertBase64ToBlobUrl(configCache.customAudios);
+            }
+            
+            initPreloadCache();
+            syncMasterToggle();
+            console.log("✅ [GMGN 盯盘伴侣] 音频系统恢复完成！");
+        });
+    }
+    
+    lastVisibilityState = document.visibilityState;
+    lastVisibilityChangeTime = now;
+});
 
 function syncMasterToggle() {
     window.dispatchEvent(new CustomEvent('GMGN_AUDIO_TOGGLE', { detail: { enabled: configCache.isMasterEnabled } }));
@@ -154,11 +232,19 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
     }
 });
 
-let lastPlayTime = {};
+// 🌟 优化：使用 Map 结构，利用其维持插入顺序的特性进行优雅的 LRU 淘汰
+let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
 function processTwitterMessage(e) {
-    if (Object.keys(lastPlayTime).length > 1000) lastPlayTime = {};
+    // 平滑清理：当容量超过 1000 时，只清理最老的 100 条，而不是全部清空
+    if (lastPlayTime.size > 1000) {
+        let i = 0;
+        for (const key of lastPlayTime.keys()) {
+            lastPlayTime.delete(key);
+            if (++i > 100) break;
+        }
+    }
     if (!e.detail || !Array.isArray(e.detail.triggers)) return;
 
     const now = Date.now();
@@ -166,7 +252,6 @@ function processTwitterMessage(e) {
     let vipFallbackDefault = false;
     let nobodyWantsDefault = false;
     let isVipPresent = false;
-    let matchedVipName = "无";
 
     e.detail.triggers.forEach(trigger => {
         if (!trigger || typeof trigger.id !== 'string') return;
@@ -184,9 +269,9 @@ function processTwitterMessage(e) {
 
         if (mappedAudioId) {
             isVipPresent = true;
-            matchedVipName = twitterId;
-            if (lastPlayTime[twitterId] && (now - lastPlayTime[twitterId] < 2500)) return;
-            lastPlayTime[twitterId] = now;
+            // 🌟 修正：严格使用 Map API 读取和写入，确保 size 计算准确
+            if (lastPlayTime.has(twitterId) && (now - lastPlayTime.get(twitterId) < 2500)) return;
+            lastPlayTime.set(twitterId, now);
 
             if (configCache.customAudios[mappedAudioId]) {
                 const customObj = configCache.customAudios[mappedAudioId];
@@ -197,8 +282,9 @@ function processTwitterMessage(e) {
                 vipAudioSrc = chrome.runtime.getURL(`sounds/${mappedAudioId}`);
             }
         } else {
-            if (lastPlayTime[twitterId] && (now - lastPlayTime[twitterId] < 2500)) return;
-            lastPlayTime[twitterId] = now;
+            // 🌟 修正：严格使用 Map API 读取和写入
+            if (lastPlayTime.has(twitterId) && (now - lastPlayTime.get(twitterId) < 2500)) return;
+            lastPlayTime.set(twitterId, now);
             nobodyWantsDefault = true;
         }
     });
@@ -206,13 +292,68 @@ function processTwitterMessage(e) {
     // 🌟 核心提速：从内存池中快速克隆，跳过繁重的解码和网络IO过程
     const playConcurrentAudio = (src) => {
         let player;
-        if (preloadedAudios.has(src)) {
+        const cachedAudio = preloadedAudios.get(src);
+        
+        // 检查缓存的音频是否健康
+        if (cachedAudio && checkAudioHealth(cachedAudio)) {
             // cloneNode(true) 能以微秒级速度直接拷贝已解码的音频节点结构
-            player = preloadedAudios.get(src).cloneNode(true);
+            player = cachedAudio.cloneNode(true);
         } else {
-            // 如果缓存未命中，安全兜底降级到传统模式
-            player = new Audio(src);
+            // 🔥 关键修复：如果是 Blob URL 失效，需要重新生成 Blob
+            if (cachedAudio) {
+                console.warn("⚠️ [GMGN 盯盘伴侣] 音频缓存已失效，正在重新加载:", src);
+                preloadedAudios.delete(src);
+
+                // 如果是 Blob URL 失效，尝试从 customAudios 重新生成
+                if (src.startsWith('blob:')) {
+                    const customKey = Object.keys(configCache.customAudios).find(
+                        key => configCache.customAudios[key].data === src
+                    );
+                    if (customKey) {
+                        console.warn("🔄 [GMGN 盯盘伴侣] 检测到 Blob URL 失效，本次降级播放默认音防漏报！");
+
+                        // 立即降级播放默认音兜底
+                        const fallbackSrc = chrome.runtime.getURL(configCache.defaultAudio);
+                        if (src !== fallbackSrc) {
+                            player = new Audio(fallbackSrc);
+                        }
+
+                        // 🌟 核心修复：加入重建锁，阻断并发重入风暴
+                        if (!isRebuildingBlob) {
+                            isRebuildingBlob = true;
+                            console.log("🔒 [GMGN 盯盘伴侣] 发起单例 Blob 重建任务...");
+
+                            chrome.storage.local.get(['customAudios'], async (result) => {
+                                if (result.customAudios) {
+                                    for (const key in configCache.customAudios) {
+                                        const oldData = configCache.customAudios[key].data;
+                                        if (typeof oldData === 'string' && oldData.startsWith('blob:')) {
+                                            URL.revokeObjectURL(oldData);
+                                        }
+                                    }
+                                    configCache.customAudios = result.customAudios;
+                                    await convertBase64ToBlobUrl(configCache.customAudios);
+                                    initPreloadCache();
+                                    isRebuildingBlob = false; // 解锁
+                                    console.log("🔓 [GMGN 盯盘伴侣] Blob 重建任务完成！");
+                                } else {
+                                    isRebuildingBlob = false;
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+
+            // 🚨 核心修复：只有在 player 没有被兜底逻辑接管时，才创建新的 Audio
+            if (!player) {
+                player = new Audio(src);
+                // 缓存未命中或失效时，尝试重新预热
+                warmupAudio(src);
+            }
         }
+
+        // 统一设置音量，因为上面的分支都没有设置
         player.volume = configCache.globalVolume;
 
         // 🌟 核心修复 2：用完即焚！监听播放结束事件，彻底释放克隆节点
@@ -254,11 +395,21 @@ function processTwitterMessage(e) {
             }
         }
     } catch (error) {
-        // 🌟 核心修复：如果是上下文失效异常，拒绝吞没，直接向上抛出给外层清理器
-        if (error instanceof Error && error.message.includes('Extension context invalidated')) {
-            throw error;
+        // 🔥 优化：精准的异常处理，不掩盖真实错误
+        if (error instanceof Error) {
+            // 上下文失效异常，向上抛出
+            if (error.message.includes('Extension context invalidated')) {
+                throw error;
+            }
+            // 其他错误，详细记录
+            console.error("[GMGN 盯盘伴侣] 播放异常:", {
+                message: error.message,
+                stack: error.stack,
+                name: error.name
+            });
+        } else {
+            console.error("[GMGN 盯盘伴侣] 未知播放异常:", error);
         }
-        console.error("[GMGN 盯盘伴侣] 播放异常捕获:", error);
     }
 }
 
