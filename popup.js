@@ -213,10 +213,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const div = document.createElement('div');
                     div.className = 'list-item';
-                    // ✅ 修改后：给这三个变量套上 escapeHTML 铠甲
+                    // ✅ 修改后：给涉及 DOM 属性注入的所有变量套上 escapeHTML 铠甲
                     const safeTid = escapeHTML(tid);
                     const safeRemark = escapeHTML(displayRemark);
                     const safeAudioName = escapeHTML(displayAudioName);
+                    const safeActualAudioId = escapeHTML(actualAudioId); // 追加对 audioId 的防范，做到滴水不漏
 
                     const titleText = displayRemark
                         ? `@${safeTid} <span style="color: #ff9500; font-size: 11px; font-weight: normal; margin-left: 4px;">(${safeRemark})</span>`
@@ -228,10 +229,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span class="item-sub">${safeAudioName}${statusTag}</span>
                         </div>
                         <div class="action-btns">
-                            <button class="btn-icon edit" data-tid="${tid}" data-audio="${actualAudioId}" data-audioname="${displayAudioName}" data-remark="${displayRemark}">编辑</button>
-                            <button class="btn-icon del" data-tid="${tid}">删除</button>
+                            <button class="btn-icon edit" data-tid="${safeTid}" data-audio="${safeActualAudioId}" data-audioname="${safeAudioName}" data-remark="${safeRemark}">编辑</button>
+                            <button class="btn-icon del" data-tid="${safeTid}">删除</button>
                         </div>
-                        `;
+                    `;
 
                     div.querySelector('.del').addEventListener('click', () => {
                         delete mappings[tid];
