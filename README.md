@@ -1,3 +1,5 @@
+# 🍉 插件已上线谷歌商店，欢迎体验
+  直达链接：[GMGN 盯盘伴侣](https://chromewebstore.google.com/detail/neojnomamoipnncfjmbaipelkoenocco?utm_source=item-share-cb)
 # 🍉 GMGN 盯盘伴侣 (抢先体验版)
 
 这是一个帮你在看 GMGN 网站时，只要你关注的推特大V一发文，就能第一时间听到专属提示音的小插件。
