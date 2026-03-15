@@ -188,6 +188,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 
     // 🌟 在数据加载完毕后，立刻执行预热
     initPreloadCache();
+    warmupTTSVoice(); // 🎤 预热 TTS 语音引擎
 
     syncMasterToggle();
     isCacheReady = true;
@@ -252,67 +253,91 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
-// 🎤 TTS 语音合成函数
+// 🎤 TTS 语音预热与缓存机制（极致性能优化）
+let cachedTTSVoice = null;
+let isTTSVoiceReady = false;
+
+// 🚀 语音引擎预热函数：在页面加载时立刻执行，消除首次延迟
+function warmupTTSVoice() {
+    if (!('speechSynthesis' in window)) return;
+    
+    // 🔥 关键优化：监听 voiceschanged 事件，确保语音列表完全加载后再缓存
+    const selectBestVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length === 0) return; // 语音列表未就绪，等待下次触发
+        
+        const preferredVoices = [
+            'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)',
+            'Microsoft Yunyang Online (Natural) - Chinese (Mainland)',
+            'Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)',
+            'Google 國語（臺灣）',
+            'Google 普通话（中国大陆）',
+            'Microsoft Huihui - Chinese (Simplified, PRC)',
+            'Microsoft Yaoyao - Chinese (Simplified, PRC)',
+            'Ting-Ting',
+            'Sin-ji'
+        ];
+        
+        for (const preferredName of preferredVoices) {
+            const voice = voices.find(v => v.name.includes(preferredName) || v.name === preferredName);
+            if (voice) {
+                cachedTTSVoice = voice;
+                isTTSVoiceReady = true;
+                console.log("🎤 [GMGN 盯盘伴侣 - TTS] 语音预热完成:", voice.name);
+                return;
+            }
+        }
+        
+        // 降级：选择任意中文语音
+        const fallbackVoice = voices.find(v => v.lang.startsWith('zh'));
+        if (fallbackVoice) {
+            cachedTTSVoice = fallbackVoice;
+            isTTSVoiceReady = true;
+            console.log("🎤 [GMGN 盯盘伴侣 - TTS] 使用降级语音:", fallbackVoice.name);
+        }
+    };
+    
+    // 立即尝试获取（某些浏览器同步返回）
+    selectBestVoice();
+    
+    // 监听异步加载完成事件（Chrome/Edge 需要）
+    if (!isTTSVoiceReady) {
+        window.speechSynthesis.addEventListener('voiceschanged', selectBestVoice, { once: true });
+    }
+}
+
+// 🎤 TTS 语音合成函数（极速版：0 延迟启动）
 function speakText(text) {
     if (!text || typeof text !== 'string') {
         console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播报文本无效:", text);
         return;
     }
     
-    // 检查浏览器是否支持 Web Speech API
     if (!('speechSynthesis' in window)) {
         console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 当前浏览器不支持语音合成");
         return;
     }
 
     try {
-        window.speechSynthesis.cancel(); // 🛑 新增：清空历史积压队列，保证播报最新鲜的推文
+        window.speechSynthesis.cancel(); // 🛑 清空历史积压队列
         const utterance = new SpeechSynthesisUtterance(text);
         
-        // 设置中文语音
         utterance.lang = 'zh-CN';
         
-        // 🎤 尝试选择更自然的中文语音（优先级：女声 > 男声 > 默认）
-        const voices = window.speechSynthesis.getVoices();
-        const preferredVoices = [
-            // 优先选择这些自然度较高的语音
-            'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)',  // 微软晓晓（自然版）
-            'Microsoft Yunyang Online (Natural) - Chinese (Mainland)',   // 微软云扬（自然版）
-            'Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)',    // 微软晓伊（自然版）
-            'Google 國語（臺灣）',
-            'Google 普通话（中国大陆）',                                  // Google 中文
-            'Microsoft Huihui - Chinese (Simplified, PRC)',              // 微软慧慧
-            'Microsoft Yaoyao - Chinese (Simplified, PRC)',              // 微软瑶瑶
-            'Ting-Ting',                                                  // macOS 中文女声
-            'Sin-ji'                                                      // macOS 中文女声
-        ];
-        
-        let selectedVoice = null;
-        for (const preferredName of preferredVoices) {
-            selectedVoice = voices.find(v => v.name.includes(preferredName) || v.name === preferredName);
-            if (selectedVoice) break;
+        // 🚀 核心优化：直接使用预热缓存的语音，跳过耗时的查找过程
+        if (isTTSVoiceReady && cachedTTSVoice) {
+            utterance.voice = cachedTTSVoice;
         }
         
-        // 如果没找到偏好语音，尝试找任何中文语音
-        if (!selectedVoice) {
-            selectedVoice = voices.find(v => v.lang.startsWith('zh'));
-        }
-        
-        if (selectedVoice) {
-            utterance.voice = selectedVoice;
-            console.log("🎤 [GMGN 盯盘伴侣 - TTS] 使用语音:", selectedVoice.name);
-        }
-        
-        // 🔥 优化语音参数：提升音量和清晰度
+        // 🔥 优化语音参数
         utterance.rate = 1.00;
         utterance.pitch = 1.05;
-        utterance.volume = Math.min(configCache.globalVolume * 1.5, 1.0); // 🔥 音量提升 50%，但不超过 1.0
+        utterance.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
         
         utterance.onerror = (event) => {
             console.error("❌ [GMGN 盯盘伴侣 - TTS] 播报失败:", event);
         };
         
-        // 播放语音
         window.speechSynthesis.speak(utterance);
         
     } catch (error) {
