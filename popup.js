@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (els.enableTTSToggle.checked && genericSounds.includes(audioId)) {
                                 needsTTS = true;
                                 const speakerName = remark || twitterId;
-                                ttsText = `${speakerName}发推啦`;
+                                ttsText = `${speakerName} 发推啦`;
                             }
                         }
                         

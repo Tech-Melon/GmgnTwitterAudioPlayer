@@ -412,7 +412,7 @@ function processTwitterMessage(e) {
                         speakerName = rule.remark;
                     }
                     
-                    ttsInfo = `${speakerName}发推啦`;
+                    ttsInfo = `${speakerName} 发推啦`;
                 }
             }
         } else {
@@ -553,7 +553,7 @@ function processTwitterMessage(e) {
                     const firstTrigger = e.detail.triggers.find(t => t && typeof t.id === 'string');
                     if (firstTrigger) {
                         const speakerName = firstTrigger.id.trim();
-                        unmappedTTS = `${speakerName}发推啦`;
+                        unmappedTTS = `${speakerName} 发推啦`;
                     }
                 }
                 
