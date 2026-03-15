@@ -7,7 +7,8 @@ script.onload = function () { this.remove(); };
 let configCache = {
     mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0,
     eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true },
-    playDefaultUnmapped: true // 🌟 新增开关缓存，默认开启
+    playDefaultUnmapped: true, // 🌟 新增开关缓存，默认开启
+    enableTTS: true // 🌟 新增：语音播报博主名字开关，默认开启
 };
 
 // 🌟 新增核心：极速内存预热引擎
@@ -113,13 +114,14 @@ document.addEventListener('visibilitychange', () => {
         };
         
         // 重新加载配置并预热音频
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped'], async (result) => {
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], async (result) => {
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
             if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
             if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
             if (result.eventFilters) configCache.eventFilters = result.eventFilters;
             if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
+            if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
             
             if (result.customAudios) {
                 // 🔥 关键修复：回收旧的 Blob URL，防止内存泄漏
@@ -166,7 +168,7 @@ async function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped'], async (result) => { // 🌟 数组加了 'playDefaultUnmapped'
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], async (result) => { // 🌟 数组加了 'playDefaultUnmapped' 和 'enableTTS'
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
@@ -177,6 +179,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 
     // 🌟 赋值缓存
     if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
+    if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
@@ -221,6 +224,9 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         // 🌟 监听开关变动更新缓存
         if (changes.playDefaultUnmapped) {
             configCache.playDefaultUnmapped = changes.playDefaultUnmapped.newValue;
+        }
+        if (changes.enableTTS) {
+            configCache.enableTTS = changes.enableTTS.newValue;
         }
         if (changes.customAudios) {
             const oldAudios = configCache.customAudios;
@@ -374,7 +380,7 @@ function processTwitterMessage(e) {
                 
                 // 只有通用提示音才需要 TTS，人物专属音频不需要
                 const genericSounds = ['default.MP3', 'preset1.MP3'];
-                if (genericSounds.includes(mappedAudioId)) {
+                if (configCache.enableTTS && genericSounds.includes(mappedAudioId)) {
                     // 提取播报名称：优先使用 remark，其次用 twitterId
                     let speakerName = twitterId;
                     if (typeof rule === 'object' && rule !== null && rule.remark) {
@@ -514,7 +520,19 @@ function processTwitterMessage(e) {
             if (configCache.playDefaultUnmapped && (now - globalLastPlayTime > 2000)) {
                 globalLastPlayTime = now;
                 audioSyncChannel.postMessage('PLAYING_AUDIO');
-                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+                
+                // 🎤 未匹配规则时，如果开启了 TTS，播报博主名字
+                let unmappedTTS = null;
+                if (configCache.enableTTS) {
+                    // 从 triggers 中提取第一个触发者的 ID 作为播报对象
+                    const firstTrigger = e.detail.triggers.find(t => t && typeof t.id === 'string');
+                    if (firstTrigger) {
+                        const speakerName = firstTrigger.id.trim();
+                        unmappedTTS = `${speakerName}发推啦`;
+                    }
+                }
+                
+                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), unmappedTTS);
             }
         }
     } catch (error) {

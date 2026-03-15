@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const els = {
         masterToggle: document.getElementById('masterToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
+        enableTTSToggle: document.getElementById('enableTTSToggle'), // 🌟 新增的 TTS 开关
         globalVolume: document.getElementById('globalVolume'),
         volumePercent: document.getElementById('volumePercent'),
         uploadBtn: document.getElementById('uploadBtn'),
@@ -103,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function loadData() {
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped'], (result) => {
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
 
@@ -113,6 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
             els.masterToggle.checked = result.isMasterEnabled !== false;
             // 🌟 默认勾选，所以当 undefined 时也为 true
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
+            els.enableTTSToggle.checked = result.enableTTS !== false;
             els.filterTweet.checked = filters.tweet !== false;
             els.filterRepost.checked = filters.repost !== false;
             els.filterReply.checked = filters.reply !== false;
@@ -256,8 +258,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             audioSrc = chrome.runtime.getURL(`sounds/${audioId}`);
                             
                             // 🔥 关键修复：只有通用提示音才需要 TTS，人物专属音频不需要
+                            // 🌟 新增：检查全局 TTS 开关（使用 els.enableTTSToggle 直接读取当前状态）
                             const genericSounds = ['default.MP3', 'preset1.MP3'];
-                            if (genericSounds.includes(audioId)) {
+                            if (els.enableTTSToggle.checked && genericSounds.includes(audioId)) {
                                 needsTTS = true;
                                 const speakerName = remark || twitterId;
                                 ttsText = `${speakerName}发推啦`;
@@ -420,6 +423,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
             // 🌟 原文：showToast(e.target.checked ? '未映射将播放默认音' : '未映射将静默推送');
             showToast(e.target.checked ? '已开启默认音频' : '已关闭默认音频');
+        });
+    });
+    els.enableTTSToggle.addEventListener('change', (e) => {
+        chrome.storage.local.set({ enableTTS: e.target.checked }, () => {
+            showToast(e.target.checked ? '已开启语音播报' : '已关闭语音播报');
         });
     });
     els.uploadBtn.addEventListener('click', async () => {
