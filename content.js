@@ -136,7 +136,10 @@ document.addEventListener('visibilitychange', () => {
             
             initPreloadCache();
             syncMasterToggle();
-            console.log("✅ [GMGN 盯盘伴侣] 音频系统恢复完成！");
+            console.log("✅ [GMGN 盯盘伴侣] 音频系统恢复完成:", {
+                mappingCount: Object.keys(configCache.mappings).length,
+                customAudioCount: Object.keys(configCache.customAudios).length
+            });
         });
     }
     
@@ -185,6 +188,13 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 
     syncMasterToggle();
     isCacheReady = true;
+
+    console.log("⚙️ [GMGN 盯盘伴侣] 配置加载完成:", {
+        mappingCount: Object.keys(configCache.mappings).length,
+        customAudioCount: Object.keys(configCache.customAudios).length,
+        isMasterEnabled: configCache.isMasterEnabled,
+        playDefaultUnmapped: configCache.playDefaultUnmapped
+    });
 
     if (pendingWsMessages.length > 0) {
         pendingWsMessages.forEach(processTwitterMessage);
@@ -236,6 +246,74 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
+// 🎤 TTS 语音合成函数
+function speakText(text) {
+    if (!text || typeof text !== 'string') {
+        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播报文本无效:", text);
+        return;
+    }
+    
+    // 检查浏览器是否支持 Web Speech API
+    if (!('speechSynthesis' in window)) {
+        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 当前浏览器不支持语音合成");
+        return;
+    }
+
+    try {
+        window.speechSynthesis.cancel(); // 🛑 新增：清空历史积压队列，保证播报最新鲜的推文
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // 设置中文语音
+        utterance.lang = 'zh-CN';
+        
+        // 🎤 尝试选择更自然的中文语音（优先级：女声 > 男声 > 默认）
+        const voices = window.speechSynthesis.getVoices();
+        const preferredVoices = [
+            // 优先选择这些自然度较高的语音
+            'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)',  // 微软晓晓（自然版）
+            'Microsoft Yunyang Online (Natural) - Chinese (Mainland)',   // 微软云扬（自然版）
+            'Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)',    // 微软晓伊（自然版）
+            'Google 國語（臺灣）',
+            'Google 普通话（中国大陆）',                                  // Google 中文
+            'Microsoft Huihui - Chinese (Simplified, PRC)',              // 微软慧慧
+            'Microsoft Yaoyao - Chinese (Simplified, PRC)',              // 微软瑶瑶
+            'Ting-Ting',                                                  // macOS 中文女声
+            'Sin-ji'                                                      // macOS 中文女声
+        ];
+        
+        let selectedVoice = null;
+        for (const preferredName of preferredVoices) {
+            selectedVoice = voices.find(v => v.name.includes(preferredName) || v.name === preferredName);
+            if (selectedVoice) break;
+        }
+        
+        // 如果没找到偏好语音，尝试找任何中文语音
+        if (!selectedVoice) {
+            selectedVoice = voices.find(v => v.lang.startsWith('zh'));
+        }
+        
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+            console.log("🎤 [GMGN 盯盘伴侣 - TTS] 使用语音:", selectedVoice.name);
+        }
+        
+        // 🔥 优化语音参数：提升音量和清晰度
+        utterance.rate = 1.00;
+        utterance.pitch = 1.05;
+        utterance.volume = Math.min(configCache.globalVolume * 1.5, 1.0); // 🔥 音量提升 50%，但不超过 1.0
+        
+        utterance.onerror = (event) => {
+            console.error("❌ [GMGN 盯盘伴侣 - TTS] 播报失败:", event);
+        };
+        
+        // 播放语音
+        window.speechSynthesis.speak(utterance);
+        
+    } catch (error) {
+        console.error("❌ [GMGN 盯盘伴侣 - TTS] 播报异常:", error);
+    }
+}
+
 function processTwitterMessage(e) {
     // 平滑清理：当容量超过 1000 时，只清理最老的 100 条，而不是全部清空
     if (lastPlayTime.size > 1000) {
@@ -252,6 +330,9 @@ function processTwitterMessage(e) {
     let vipFallbackDefault = false;
     let nobodyWantsDefault = false;
     let isVipPresent = false;
+
+    // 🎤 用于存储需要 TTS 播报的信息
+    let ttsInfo = null;
 
     e.detail.triggers.forEach(trigger => {
         if (!trigger || typeof trigger.id !== 'string') return;
@@ -273,13 +354,35 @@ function processTwitterMessage(e) {
             if (lastPlayTime.has(twitterId) && (now - lastPlayTime.get(twitterId) < 2500)) return;
             lastPlayTime.set(twitterId, now);
 
+            console.log("✅ [GMGN 盯盘伴侣] 规则匹配:", {
+                twitterId,
+                audioId: mappedAudioId,
+                hasRemark: !!(typeof rule === 'object' && rule.remark)
+            });
+
             if (configCache.customAudios[mappedAudioId]) {
+                // 🎤 自定义音频：直接播放，不加 TTS
                 const customObj = configCache.customAudios[mappedAudioId];
                 vipAudioSrc = typeof customObj === 'string' ? customObj : customObj.data;
+                ttsInfo = null; // 自定义音频不需要 TTS
             } else if (mappedAudioId.startsWith('custom_')) {
                 vipFallbackDefault = true;
+                console.log("⚠️ [GMGN 盯盘伴侣] 自定义音频丢失，降级为默认音频");
             } else {
+                // 🎤 内置音频：区分通用提示音和人物专属音
                 vipAudioSrc = chrome.runtime.getURL(`sounds/${mappedAudioId}`);
+                
+                // 只有通用提示音才需要 TTS，人物专属音频不需要
+                const genericSounds = ['default.MP3', 'preset1.MP3'];
+                if (genericSounds.includes(mappedAudioId)) {
+                    // 提取播报名称：优先使用 remark，其次用 twitterId
+                    let speakerName = twitterId;
+                    if (typeof rule === 'object' && rule !== null && rule.remark) {
+                        speakerName = rule.remark;
+                    }
+                    
+                    ttsInfo = `${speakerName}发推啦`;
+                }
             }
         } else {
             // 🌟 修正：严格使用 Map API 读取和写入
@@ -290,7 +393,8 @@ function processTwitterMessage(e) {
     });
 
     // 🌟 核心提速：从内存池中快速克隆，跳过繁重的解码和网络IO过程
-    const playConcurrentAudio = (src) => {
+    // 🎤 新增参数：ttsText - 如果提供，则在音频播放结束后进行语音播报
+    const playConcurrentAudio = (src, ttsText = null) => {
         let player;
         const cachedAudio = preloadedAudios.get(src);
         
@@ -310,7 +414,10 @@ function processTwitterMessage(e) {
                         key => configCache.customAudios[key].data === src
                     );
                     if (customKey) {
-                        console.warn("🔄 [GMGN 盯盘伴侣] 检测到 Blob URL 失效，本次降级播放默认音防漏报！");
+                        console.warn("🔄 [GMGN 盯盘伴侣] Blob URL 失效，触发重建:", {
+                            customKey,
+                            oldSrc: src.substring(0, 50) + '...'
+                        });
 
                         // 立即降级播放默认音兜底
                         const fallbackSrc = chrome.runtime.getURL(configCache.defaultAudio);
@@ -367,11 +474,26 @@ function processTwitterMessage(e) {
             player = null; // 切断 JS 引用，立刻交由 GC 回收
         };
 
-        player.addEventListener('ended', cleanup);
+        // 🎤 如果需要 TTS 播报，在音频播放结束后触发
+        if (ttsText) {
+            player.addEventListener('ended', () => {
+                speakText(ttsText);
+                cleanup();
+            });
+        } else {
+            player.addEventListener('ended', cleanup);
+        }
+        
         player.addEventListener('error', cleanup);
 
         player.play().catch(err => {
-            if (err.name !== 'NotAllowedError') console.warn("[GMGN 盯盘伴侣] Playback Error:", err);
+            if (err.name !== 'NotAllowedError') {
+                console.error("❌ [GMGN 盯盘伴侣] 播放失败:", {
+                    error: err.name,
+                    message: err.message,
+                    src: src.substring(0, 50) + '...'
+                });
+            }
             cleanup(); // 如果播放被拦截或失败，也立刻执行销毁
         });
     };
@@ -380,11 +502,12 @@ function processTwitterMessage(e) {
         if (vipAudioSrc) {
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
-            playConcurrentAudio(vipAudioSrc);
+            playConcurrentAudio(vipAudioSrc, ttsInfo); // 🎤 传入 TTS 文本
         } else if (vipFallbackDefault) {
             // 降级情况：文件丢失被迫使用默认音 (不受新开关影响，照常播放)
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
+            console.log("🎵 [GMGN 盯盘伴侣] 降级播放默认音频");
             playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
         } else if (nobodyWantsDefault && !isVipPresent) {
             // 🌟 新增判断：只有当允许播放未映射音频，且距离上次播放大于2秒时，才播放

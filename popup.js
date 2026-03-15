@@ -229,10 +229,87 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span class="item-sub">${safeAudioName}${statusTag}</span>
                         </div>
                         <div class="action-btns">
+                            <button class="btn-icon play" data-audio="${safeActualAudioId}" data-tid="${safeTid}" data-remark="${safeRemark}">▶ 试听</button>
                             <button class="btn-icon edit" data-tid="${safeTid}" data-audio="${safeActualAudioId}" data-audioname="${safeAudioName}" data-remark="${safeRemark}">编辑</button>
                             <button class="btn-icon del" data-tid="${safeTid}">删除</button>
                         </div>
                     `;
+
+                    div.querySelector('.play').addEventListener('click', (e) => {
+                        const audioId = e.target.dataset.audio;
+                        const twitterId = e.target.dataset.tid;
+                        const remark = e.target.dataset.remark;
+                        let audioSrc;
+                        let needsTTS = false;
+                        let ttsText = '';
+                        
+                        if (audioId.startsWith('custom_')) {
+                            // 自定义音频：只播放，不 TTS
+                            if (customAudios[audioId]) {
+                                audioSrc = typeof customAudios[audioId] === 'string' ? customAudios[audioId] : customAudios[audioId].data;
+                            } else {
+                                showToast('音频文件丢失，播放默认音');
+                                audioSrc = chrome.runtime.getURL('sounds/default.MP3');
+                            }
+                        } else {
+                            // 内置音频
+                            audioSrc = chrome.runtime.getURL(`sounds/${audioId}`);
+                            
+                            // 🔥 关键修复：只有通用提示音才需要 TTS，人物专属音频不需要
+                            const genericSounds = ['default.MP3', 'preset1.MP3'];
+                            if (genericSounds.includes(audioId)) {
+                                needsTTS = true;
+                                const speakerName = remark || twitterId;
+                                ttsText = `${speakerName}发推啦`;
+                            }
+                        }
+                        
+                        const audio = new Audio(audioSrc);
+                        audio.volume = parseFloat(els.globalVolume.value);
+                        
+                        if (needsTTS && 'speechSynthesis' in window) {
+                            // 音频播放完成后触发 TTS
+                            audio.addEventListener('ended', () => {
+                                const utterance = new SpeechSynthesisUtterance(ttsText);
+                                utterance.lang = 'zh-CN';
+                                
+                                // 🎤 选择更自然的中文语音
+                                const voices = window.speechSynthesis.getVoices();
+                                const preferredVoices = [
+                                    'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)',
+                                    'Microsoft Yunyang Online (Natural) - Chinese (Mainland)',
+                                    'Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)',
+                                    'Google 國語（臺灣）',
+                                    'Google 普通话（中国大陆）',
+                                    'Microsoft Huihui - Chinese (Simplified, PRC)',
+                                    'Microsoft Yaoyao - Chinese (Simplified, PRC)',
+                                    'Ting-Ting',
+                                    'Sin-ji'
+                                ];
+                                
+                                let selectedVoice = null;
+                                for (const preferredName of preferredVoices) {
+                                    selectedVoice = voices.find(v => v.name.includes(preferredName) || v.name === preferredName);
+                                    if (selectedVoice) break;
+                                }
+                                
+                                if (!selectedVoice) {
+                                    selectedVoice = voices.find(v => v.lang.startsWith('zh'));
+                                }
+                                
+                                if (selectedVoice) utterance.voice = selectedVoice;
+                                
+                                // 🔥 优化语音参数：提升音量和清晰度
+                                // 微调建议：
+                                window.speechSynthesis.cancel(); // 🛑 新增：打断正在播放的试听，防止疯狂连点导致排队
+                                utterance.rate = 1.00;  // 稍微放慢一点语速，显得更从容清晰
+                                utterance.pitch = 1.05; // 稍微拉高一点点音调，让声音听起来更有活力
+                                utterance.volume = Math.min(parseFloat(els.globalVolume.value) * 1.5, 1.0); // 🔥 音量提升 50%
+                                window.speechSynthesis.speak(utterance);
+                            });
+                        }
+                        audio.play().catch(err => showToast('播放失败'));
+                    });
 
                     div.querySelector('.del').addEventListener('click', () => {
                         delete mappings[tid];
