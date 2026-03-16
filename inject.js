@@ -36,14 +36,21 @@
                         if (!tweetData) return;
                         const actionType = tweetData.tw || 'unknown';
 
-                        // 🎯 核心修正：只提取主动发起动作的推特 ID (u.s)，彻底忽略被动提及 (su.s)
+                        // 🎯 核心修正：提取推特 ID (u.s) 和显示名称 (u.n)，用于 TTS 播报
                         if (tweetData.u && tweetData.u.s) {
-                            triggersMap.set(tweetData.u.s, actionType);
+                            triggersMap.set(tweetData.u.s, {
+                                actionType: actionType,
+                                displayName: tweetData.u.n || tweetData.u.s // 优先使用显示名称，降级使用 ID
+                            });
                         }
                     });
 
                     if (triggersMap.size > 0) {
-                        const triggersArray = Array.from(triggersMap).map(([id, tw]) => ({ id, tw }));
+                        const triggersArray = Array.from(triggersMap).map(([id, data]) => ({ 
+                            id, 
+                            tw: data.actionType,
+                            name: data.displayName
+                        }));
 
                         window.dispatchEvent(new CustomEvent('TWITTER_WS_MSG_RECEIVED', {
                             detail: { triggers: triggersArray }

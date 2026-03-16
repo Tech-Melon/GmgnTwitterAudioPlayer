@@ -369,6 +369,7 @@ function processTwitterMessage(e) {
         if (!trigger || typeof trigger.id !== 'string') return;
 
         const twitterId = trigger.id.trim().toLowerCase();
+        const displayName = trigger.name || twitterId; // 🎤 获取显示名称，用于 TTS 播报
         const rawActionType = trigger.tw;
 
         const knownTypes = ['tweet', 'repost', 'reply', 'quote'];
@@ -406,8 +407,8 @@ function processTwitterMessage(e) {
                 // 只有通用提示音才需要 TTS，人物专属音频不需要
                 const genericSounds = ['default.MP3', 'preset1.MP3'];
                 if (configCache.enableTTS && genericSounds.includes(mappedAudioId)) {
-                    // 提取播报名称：优先使用 remark，其次用 twitterId
-                    let speakerName = twitterId;
+                    // 提取播报名称：优先使用 remark，其次用显示名称，最后降级到 ID
+                    let speakerName = displayName;
                     if (typeof rule === 'object' && rule !== null && rule.remark) {
                         speakerName = rule.remark;
                     }
@@ -549,10 +550,10 @@ function processTwitterMessage(e) {
                 // 🎤 未匹配规则时，如果开启了 TTS，播报博主名字
                 let unmappedTTS = null;
                 if (configCache.enableTTS) {
-                    // 从 triggers 中提取第一个触发者的 ID 作为播报对象
+                    // 从 triggers 中提取第一个触发者的显示名称作为播报对象
                     const firstTrigger = e.detail.triggers.find(t => t && typeof t.id === 'string');
                     if (firstTrigger) {
-                        const speakerName = firstTrigger.id.trim();
+                        const speakerName = firstTrigger.name || firstTrigger.id.trim();
                         unmappedTTS = `${speakerName} 发推啦`;
                     }
                 }
