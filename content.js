@@ -2,7 +2,7 @@ let configCache = {};
 let isCacheReady = false;
 let pendingWsMessages = [];
 let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
-let isLockedByOtherTab = false;
+let otherTabLastPlayTime = 0; // 绝对时间戳替代 boolean 锁，防止 setTimeout 被 Chrome 节流到 1 分钟导致卡死
 
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('inject.js') + '?v=' + Date.now();
@@ -31,11 +31,20 @@ script.onload = function () { this.remove(); };
 // 部署教程参考：https://github.com/DIYgod/cloudflare-edge-tts
 const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev";
 
-// 🌟 极速双缓存引擎：IndexedDB 本地持久化
+// 🌟 极速双缓存引擎：IndexedDB 本地持久化（带连接健康检查 + 超时保护）
 const idb = {
     db: null,
     async init() {
-        if (this.db) return this.db;
+        if (this.db) {
+            try {
+                // 健康检查：尝试发起空事务，如果底层连接已断会立刻抛异常
+                this.db.transaction('audio', 'readonly');
+                return this.db;
+            } catch (e) {
+                console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 连接已失效，重连中...");
+                this.db = null;
+            }
+        }
         return new Promise((resolve, reject) => {
             const req = indexedDB.open('GMGNTTSCache', 1);
             req.onupgradeneeded = (e) => e.target.result.createObjectStore('audio', { keyPath: 'text' });
@@ -44,20 +53,37 @@ const idb = {
         });
     },
     async get(text) {
-        await this.init();
-        return new Promise((resolve, reject) => {
-            const req = this.db.transaction('audio', 'readonly').objectStore('audio').get(text);
-            req.onsuccess = () => resolve(req.result ? req.result.blob : null);
-            req.onerror = () => reject(req.error);
-        });
+        try {
+            await this.init();
+            return await Promise.race([
+                new Promise((resolve, reject) => {
+                    const req = this.db.transaction('audio', 'readonly').objectStore('audio').get(text);
+                    req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+                    req.onerror = () => reject(req.error);
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('IDB get timeout')), 3000))
+            ]);
+        } catch (e) {
+            console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 读取失败，跳过缓存:", e.message);
+            this.db = null; // 标记连接失效，下次强制重连
+            return null;    // 返回 null 让调用方走网络请求
+        }
     },
     async set(text, blob) {
-        await this.init();
-        return new Promise((resolve, reject) => {
-            const req = this.db.transaction('audio', 'readwrite').objectStore('audio').put({ text, blob, ts: Date.now() });
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
-        });
+        try {
+            await this.init();
+            await Promise.race([
+                new Promise((resolve, reject) => {
+                    const req = this.db.transaction('audio', 'readwrite').objectStore('audio').put({ text, blob, ts: Date.now() });
+                    req.onsuccess = () => resolve();
+                    req.onerror = () => reject(req.error);
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('IDB set timeout')), 3000))
+            ]);
+        } catch (e) {
+            console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 写入失败，跳过缓存:", e.message);
+            this.db = null;
+        }
     }
 };
 
@@ -131,8 +157,7 @@ function initPreloadCache() {
 
 audioSyncChannel.onmessage = (event) => {
     if (event.data === 'PLAYING_AUDIO') {
-        isLockedByOtherTab = true;
-        setTimeout(() => { isLockedByOtherTab = false; }, 2000);
+        otherTabLastPlayTime = Date.now(); // 绝对时间戳，不依赖 setTimeout（它会被 Chrome 后台标签节流）
     }
 };
 
@@ -155,8 +180,7 @@ document.addEventListener('visibilitychange', () => {
         audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
         audioSyncChannel.onmessage = (event) => {
             if (event.data === 'PLAYING_AUDIO') {
-                isLockedByOtherTab = true;
-                setTimeout(() => { isLockedByOtherTab = false; }, 2000);
+                otherTabLastPlayTime = Date.now();
             }
         };
 
@@ -342,15 +366,25 @@ async function playNetworkTTS(textItems) {
             const cacheKey = `${textChunk}_${configCache.ttsVoice}_${configCache.ttsRate}_${configCache.ttsPitch}`;
             let blob = await idb.get(cacheKey);
             if (!blob) {
-                const url = `${CF_TTS_API}/tts`;
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: textChunk, voice: configCache.ttsVoice, rate: configCache.ttsRate, pitch: configCache.ttsPitch })
-                });
-                if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
-                blob = await res.blob();
-                await idb.set(cacheKey, blob);
+                // 🛡️ 超时保护：防止 CF Worker 冷启动或网络波动时 fetch 永久 hang 住
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+                try {
+                    const url = `${CF_TTS_API}/tts`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: textChunk, voice: configCache.ttsVoice, rate: configCache.ttsRate, pitch: configCache.ttsPitch }),
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
+                    blob = await res.blob();
+                    await idb.set(cacheKey, blob);
+                } catch (e) {
+                    clearTimeout(timeoutId);
+                    throw e; // 让外层 catch 降级到原生 TTS
+                }
             }
             return blob;
         };
@@ -699,7 +733,7 @@ function handleTwitterMsg(e) {
         return;
     }
 
-    if (!configCache.isMasterEnabled || !configCache.enableTwitter || isLockedByOtherTab) return;
+    if (!configCache.isMasterEnabled || !configCache.enableTwitter || (Date.now() - otherTabLastPlayTime) < 2000) return;
     if (!isCacheReady) {
         pendingWsMessages.push(e);
         return;
