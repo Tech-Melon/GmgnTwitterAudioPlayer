@@ -57,6 +57,12 @@
             .custom-dropdown-item:hover {
                 background: #3a3a3c !important;
             }
+
+            select {
+                background: #1c1c1e !important;
+                color: #f5f5f7 !important;
+                border-color: #3a3a3c !important;
+            }
         }
 
         :root {
@@ -516,6 +522,30 @@
                 <input type="checkbox" id="enableTTSToggle" checked>
                 <span class="slider"></span>
             </label>
+        </div>
+        <div id="ttsConfigPanel" style="padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; margin-top: 8px; transition: opacity 0.3s ease;">
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                <select id="ttsVoiceSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                    <option value="zh-CN-XiaoxiaoNeural">晓晓 (甜美女生)</option>
+                    <option value="zh-CN-YunjianNeural">云健 (阳光男声)</option>
+                    <option value="zh-CN-XiaoyiNeural">晓伊 (职业干练)</option>
+                    <option value="en-US-AvaMultilingualNeural">Ava (多语种默认)</option>
+                </select>
+                <button id="ttsTestBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <select id="ttsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                    <option value="-10%">语速: 稍慢</option>
+                    <option value="+0%">语速: 正常</option>
+                    <option value="+15%">语速: 较快</option>
+                    <option value="+30%">语速: 极速</option>
+                </select>
+                <select id="ttsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                    <option value="-5%">音调: 偏低</option>
+                    <option value="+0%">音调: 正常</option>
+                    <option value="+5%">音调: 偏高</option>
+                </select>
+            </div>
         </div>
     </div>
 

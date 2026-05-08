@@ -9,6 +9,10 @@ document.addEventListener('DOMContentLoaded', () => {
         masterToggle: document.getElementById('masterToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
         enableTTSToggle: document.getElementById('enableTTSToggle'), // 🌟 新增的 TTS 开关
+        ttsVoiceSelect: document.getElementById('ttsVoiceSelect'),
+        ttsRateSelect: document.getElementById('ttsRateSelect'),
+        ttsPitchSelect: document.getElementById('ttsPitchSelect'),
+        ttsTestBtn: document.getElementById('ttsTestBtn'),
         globalVolume: document.getElementById('globalVolume'),
         volumePercent: document.getElementById('volumePercent'),
         uploadBtn: document.getElementById('uploadBtn'),
@@ -104,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function loadData() {
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], (result) => {
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch'], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
 
@@ -114,6 +118,10 @@ document.addEventListener('DOMContentLoaded', () => {
             els.masterToggle.checked = result.isMasterEnabled !== false;
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
+
+            if (result.ttsVoice) els.ttsVoiceSelect.value = result.ttsVoice;
+            if (result.ttsRate) els.ttsRateSelect.value = result.ttsRate;
+            if (result.ttsPitch) els.ttsPitchSelect.value = result.ttsPitch;
 
             // 🌟 联动子集 UI：如果总开关关闭，则把子开关置灰并禁用
             const ttsSubSetting = document.getElementById('ttsSubSetting');
@@ -283,7 +291,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
                                         text: ttsText,
-                                        voice: "zh-CN-XiaoxiaoNeural"
+                                        voice: els.ttsVoiceSelect.value,
+                                        rate: els.ttsRateSelect.value,
+                                        pitch: els.ttsPitchSelect.value
                                     })
                                 });
                                 if (!res.ok) throw new Error("TTS Request Failed");
@@ -362,6 +372,45 @@ document.addEventListener('DOMContentLoaded', () => {
     els.filterReply.addEventListener('change', saveFilters);
     els.filterQuote.addEventListener('change', saveFilters);
     els.filterOther.addEventListener('change', saveFilters); // 🌟 新增
+
+    const saveTTSConfig = () => {
+        chrome.storage.local.set({
+            ttsVoice: els.ttsVoiceSelect.value,
+            ttsRate: els.ttsRateSelect.value,
+            ttsPitch: els.ttsPitchSelect.value
+        });
+    };
+    els.ttsVoiceSelect.addEventListener('change', saveTTSConfig);
+    els.ttsRateSelect.addEventListener('change', saveTTSConfig);
+    els.ttsPitchSelect.addEventListener('change', saveTTSConfig);
+
+    els.ttsTestBtn.addEventListener('click', async () => {
+        const text = "技术瓜发推啦";
+        const voice = els.ttsVoiceSelect.value;
+        const rate = els.ttsRateSelect.value;
+        const pitch = els.ttsPitchSelect.value;
+        try {
+            const url = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice, rate, pitch })
+            });
+            if (!res.ok) throw new Error("TTS Request Failed");
+            const blob = await res.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+            audio.volume = Math.min(parseFloat(els.globalVolume.value) * 1.5, 1.0);
+            audio.addEventListener('ended', () => {
+                URL.revokeObjectURL(audioUrl);
+                audio.removeAttribute('src');
+                audio.load();
+            });
+            audio.play().catch(e => showToast('TTS 播放失败'));
+        } catch (e) {
+            showToast('网络 TTS 失败，请检查连接');
+        }
+    });
 
     els.exportRulesBtn.addEventListener('click', () => {
         chrome.storage.local.get(['twitterAudioMappings'], (result) => {

@@ -8,13 +8,15 @@ let configCache = {
     mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0,
     eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true },
     playDefaultUnmapped: true, // 🌟 新增开关缓存，默认开启
-    enableTTS: true // 🌟 新增：语音播报博主名字开关，默认开启
+    enableTTS: true, // 🌟 新增：语音播报博主名字开关，默认开启
+    ttsVoice: "zh-CN-XiaoxiaoNeural",
+    ttsRate: "+0%",
+    ttsPitch: "+0%"
 };
 
 // 🌟 新增：配置你的 Cloudflare Worker TTS API 节点
 // 部署教程参考：https://github.com/DIYgod/cloudflare-edge-tts
 const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev";
-const CF_TTS_VOICE = "zh-CN-XiaoxiaoNeural"; // 微软极品女声 晓晓
 
 // 🌟 极速双缓存引擎：IndexedDB 本地持久化
 const idb = {
@@ -149,7 +151,7 @@ document.addEventListener('visibilitychange', () => {
         };
 
         // 重新加载配置并预热音频
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], async (result) => {
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch'], async (result) => {
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
             if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
@@ -157,6 +159,9 @@ document.addEventListener('visibilitychange', () => {
             if (result.eventFilters) configCache.eventFilters = result.eventFilters;
             if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
             if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
+            if (result.ttsVoice) configCache.ttsVoice = result.ttsVoice;
+            if (result.ttsRate) configCache.ttsRate = result.ttsRate;
+            if (result.ttsPitch) configCache.ttsPitch = result.ttsPitch;
 
             if (result.customAudios) {
                 // 🔥 关键修复：回收旧的 Blob URL，防止内存泄漏
@@ -203,7 +208,7 @@ async function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], async (result) => { // 🌟 数组加了 'playDefaultUnmapped' 和 'enableTTS'
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch'], async (result) => { // 🌟 数组加了高级定制选项
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
@@ -215,6 +220,9 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     // 🌟 赋值缓存
     if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
     if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
+    if (result.ttsVoice) configCache.ttsVoice = result.ttsVoice;
+    if (result.ttsRate) configCache.ttsRate = result.ttsRate;
+    if (result.ttsPitch) configCache.ttsPitch = result.ttsPitch;
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
@@ -264,6 +272,9 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.enableTTS) {
             configCache.enableTTS = changes.enableTTS.newValue;
         }
+        if (changes.ttsVoice) configCache.ttsVoice = changes.ttsVoice.newValue;
+        if (changes.ttsRate) configCache.ttsRate = changes.ttsRate.newValue;
+        if (changes.ttsPitch) configCache.ttsPitch = changes.ttsPitch.newValue;
         if (changes.customAudios) {
             const oldAudios = configCache.customAudios;
             for (const key in oldAudios) {
@@ -293,8 +304,11 @@ async function playNetworkTTS(text) {
     if (!text || typeof text !== 'string') return;
 
     try {
+        // 生成包含所有配置参数的独立缓存 Key，防止切换音色后播放旧缓存
+        const cacheKey = `${text}_${configCache.ttsVoice}_${configCache.ttsRate}_${configCache.ttsPitch}`;
+        
         // 1. 本地极速缓存拦截 (0毫秒开销)
-        let blob = await idb.get(text);
+        let blob = await idb.get(cacheKey);
 
         if (blob) {
             console.log("⚡ [GMGN 盯盘伴侣 - TTS] 命中本地 IndexedDB，极速播放:", text);
@@ -311,7 +325,9 @@ async function playNetworkTTS(text) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 text: text,
-                voice: CF_TTS_VOICE
+                voice: configCache.ttsVoice,
+                rate: configCache.ttsRate,
+                pitch: configCache.ttsPitch
             })
         });
         
@@ -320,7 +336,7 @@ async function playNetworkTTS(text) {
         blob = await res.blob();
 
         // 3. 存入本地永久缓存 (下次 0 延迟)
-        await idb.set(text, blob);
+        await idb.set(cacheKey, blob);
         playBlobAudio(blob);
 
     } catch (error) {
