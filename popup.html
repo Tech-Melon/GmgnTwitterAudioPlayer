@@ -7,7 +7,7 @@
         @media (prefers-color-scheme: dark) {
             :root {
                 --bg-color: #1c1c1e;
-                --card-bg: #2c2c2e;
+                --card-bg: rgba(44, 44, 46, 0.75);
                 --text-main: #f5f5f7;
                 --text-sec: #98989d;
             }
@@ -68,10 +68,10 @@
         :root {
             --primary-color: #34c759;
             --bg-color: #f5f5f7;
-            --card-bg: #ffffff;
+            --card-bg: rgba(255, 255, 255, 0.75);
             --text-main: #1d1d1f;
             --text-sec: #86868b;
-            --border-radius: 12px;
+            --border-radius: 16px;
         }
 
         body {
@@ -84,6 +84,8 @@
         }
 
         .header {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -154,6 +156,8 @@
         }
 
         .volume-card {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             background: var(--card-bg);
             border-radius: var(--border-radius);
             padding: 12px 16px;
@@ -192,6 +196,8 @@
         }
 
         .card {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             background: var(--card-bg);
             border-radius: var(--border-radius);
             padding: 16px;
@@ -380,11 +386,13 @@
         }
 
         .custom-dropdown-menu {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             position: absolute;
             top: 100%;
             left: 0;
             width: 100%;
-            background: #ffffff;
+            background: rgba(255, 255, 255, 0.95) !important;
             border: 1px solid var(--primary-color);
             border-radius: 8px;
             z-index: 999;
@@ -471,7 +479,7 @@
         }
 
         .modal {
-            background: var(--card-bg);
+            background: rgba(255, 255, 255, 0.95);
             padding: 20px;
             border-radius: 16px;
             width: 280px;
@@ -488,124 +496,232 @@
             gap: 10px;
             margin-top: 16px;
         }
+    
+        .tabs {
+            display: flex;
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 4px;
+            margin-bottom: 16px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            color: var(--text-sec);
+            font-size: 13px;
+            font-weight: 500;
+            padding: 8px 0;
+            border-radius: calc(var(--border-radius) - 4px);
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            background: var(--bg-color);
+            color: var(--text-main);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    
     </style>
 </head>
 
 <body>
+
     <div id="toast">操作成功</div>
 
     <div class="header">
         <h2 class="header-title"><span class="icon">🍉</span> GMGN 盯盘伴侣</h2>
-        <label class="switch">
-            <input type="checkbox" id="masterToggle" checked>
-            <span class="slider"></span>
-        </label>
+        <a href="https://twitter.com/0xTechMelon" target="_blank" style="text-decoration: none; display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 14px; border: 1px solid #d2d2d7; font-size: 12px; color: var(--text-main); background: var(--card-bg);">
+            <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px; fill: currentColor;"><g><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 22.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.008 5.92H5.078z"></path></g></svg>
+            <span style="font-weight: 500;">0xTechMelon</span>
+        </a>
     </div>
 
-    <div class="volume-card">
-        <span>🔊 音量</span>
-        <input type="range" id="globalVolume" min="0" max="1" step="0.05" value="1">
-        <span id="volumePercent">100%</span>
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="tab-twitter">🐦 推特监控</button>
+        <button class="tab-btn" data-tab="tab-wallet">💰 钱包监控</button>
+        <button class="tab-btn" data-tab="tab-settings">⚙️ 系统设置</button>
     </div>
 
-    <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h4 style="margin: 0;">未备注账号发推提醒</h4>
-            <label class="switch">
-                <input type="checkbox" id="playDefaultToggle" checked>
-                <span class="slider"></span>
-            </label>
-        </div>
-        <div id="ttsSubSetting" style="display: flex; justify-content: space-between; align-items: center; padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; transition: opacity 0.3s ease;">
-            <h4 style="margin: 0; font-size: 13px; color: var(--text-sec);">↳ 使用 AI 语音念昵称 (替代默认提示音)</h4>
-            <label class="switch" style="transform: scale(0.9); transform-origin: right center;">
-                <input type="checkbox" id="enableTTSToggle" checked>
-                <span class="slider"></span>
-            </label>
-        </div>
-        <div id="ttsConfigPanel" style="padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; margin-top: 8px; transition: opacity 0.3s ease;">
-            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                <select id="ttsVoiceSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
-                    <option value="zh-CN-XiaoxiaoNeural">晓晓 (甜美女生)</option>
-                    <option value="zh-CN-YunjianNeural">云健 (阳光男声)</option>
-                    <option value="zh-CN-XiaoyiNeural">晓伊 (职业干练)</option>
-                    <option value="en-US-AvaMultilingualNeural">Ava (多语种默认)</option>
-                </select>
-                <button id="ttsTestBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+    <!-- 推特监控 Tab -->
+    <div id="tab-twitter" class="tab-content active">
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="margin: 0;">未备注账号发推提醒</h4>
+                <label class="switch">
+                    <input type="checkbox" id="playDefaultToggle" checked>
+                    <span class="slider"></span>
+                </label>
             </div>
-            <div style="display: flex; gap: 8px;">
-                <select id="ttsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
-                    <option value="-10%">语速: 稍慢</option>
-                    <option value="+0%">语速: 正常</option>
-                    <option value="+15%">语速: 较快</option>
-                    <option value="+30%">语速: 极速</option>
-                </select>
-                <select id="ttsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
-                    <option value="-5%">音调: 偏低</option>
-                    <option value="+0%">音调: 正常</option>
-                    <option value="+5%">音调: 偏高</option>
-                </select>
-            </div>
-        </div>
-    </div>
-
-    <div class="card">
-        <h4>监听事件类型</h4>
-        <div class="filter-group">
-            <label><input type="checkbox" id="filterTweet" checked> 推文</label>
-            <label><input type="checkbox" id="filterRepost" checked> 转发</label>
-            <label><input type="checkbox" id="filterReply" checked> 回复</label>
-            <label><input type="checkbox" id="filterQuote" checked> 引用</label>
-            <label><input type="checkbox" id="filterOther" checked> 其他(置顶/头像等)</label>
-        </div>
-    </div>
-
-    <div class="card">
-        <h4>设置专属提示音</h4>
-        <input type="text" id="twitterId" placeholder="输入 Twitter ID (如: binance)">
-        <input type="text" id="twitterRemark" placeholder="备注 (选填，如: 币安官推)">
-
-        <div class="custom-select" id="addSelectWrapper">
-            <button class="custom-select-trigger" id="addSelectTrigger"><span>默认提示音</span> ▾</button>
-            <input type="hidden" id="addAudioValue" value="default.MP3">
-            <input type="hidden" id="addAudioName" value="默认提示音">
-            <div class="custom-dropdown-menu" id="addSelectMenu">
-                <input type="text" class="custom-dropdown-search" id="addSelectSearch" placeholder="搜索音频名称...">
-                <div class="custom-dropdown-list" id="addSelectList"></div>
+            <div id="ttsSubSetting" style="display: flex; justify-content: space-between; align-items: center; padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; transition: opacity 0.3s ease;">
+                <h4 style="margin: 0; font-size: 13px; color: var(--text-sec);">↳ 使用 AI 语音念昵称 (替代默认提示音)</h4>
+                <label class="switch" style="transform: scale(0.9); transform-origin: right center;">
+                    <input type="checkbox" id="enableTTSToggle" checked>
+                    <span class="slider"></span>
+                </label>
             </div>
         </div>
 
-        <button id="addRuleBtn">添加专属音</button>
-    </div>
-
-    <div class="card">
-        <h4>自定义音频库</h4>
-        <input type="file" id="customAudioFile" accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,.zip,audio/*" multiple
-            style="margin-bottom: 10px;">
-        <div style="display: flex; gap: 10px;">
-            <button id="uploadBtn" class="outline">导入音频(支持zip)</button>
-            <button id="exportAudioZipBtn" class="outline"
-                style="color: var(--primary-color); border-color: var(--primary-color);">导出ZIP备份</button>
+        <div class="card">
+            <h4>自定义音频库</h4>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                <input type="file" id="customAudioFile" multiple accept=".mp3,.wav,.ogg,.aac,.m4a,.flac,.zip" style="font-size: 12px; flex: 1;">
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button id="uploadBtn" class="outline">导入音频(支持zip)</button>
+                <button id="exportAudioZipBtn" class="outline" style="color: var(--primary-color); border-color: var(--primary-color);">导出ZIP备份</button>
+            </div>
+            <div id="customAudioList" class="list-container" style="margin-top: 10px;"></div>
         </div>
-        <div id="customAudioList" class="list-container" style="margin-top: 10px;"></div>
-    </div>
 
-    <div class="card">
-        <h4>规则管理 (JSON)</h4>
-        <div style="display: flex; gap: 10px;">
-            <button id="exportRulesBtn" class="outline">导出规则</button>
-            <button id="importRulesBtn" class="outline">导入规则</button>
-            <input type="file" id="importRulesFile" accept=".json" style="display: none;">
+        <div class="card">
+            <h4>监听事件类型</h4>
+            <div class="filter-group">
+                <label><input type="checkbox" id="filterTweet" checked> 推文</label>
+                <label><input type="checkbox" id="filterRepost" checked> 转发</label>
+                <label><input type="checkbox" id="filterReply" checked> 回复</label>
+                <label><input type="checkbox" id="filterQuote" checked> 引用</label>
+                <label><input type="checkbox" id="filterOther" checked> 其他(置顶/头像等)</label>
+            </div>
+        </div>
+
+        <div class="card" style="position: relative; z-index: 10;">
+            <h4>设置专属提示音</h4>
+            <input type="text" id="twitterId" placeholder="输入 Twitter ID (如: binance)">
+            <input type="text" id="twitterRemark" placeholder="备注 (选填，如: 币安官推)">
+
+            <div class="custom-select" id="addSelectWrapper">
+                <button class="custom-select-trigger" id="addSelectTrigger"><span>默认提示音</span> ▾</button>
+                <input type="hidden" id="addAudioValue" value="default.MP3">
+                <input type="hidden" id="addAudioName" value="默认提示音">
+                <div class="custom-dropdown-menu" id="addSelectMenu">
+                    <input type="text" class="custom-dropdown-search" id="addSelectSearch" placeholder="搜索音频名称...">
+                    <div class="custom-dropdown-list" id="addSelectList"></div>
+                </div>
+            </div>
+
+            <button id="addRuleBtn">添加专属音</button>
+        </div>
+
+        <div class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="margin: 0;">已配置规则</h4>
+            </div>
+            <input type="text" id="searchInput" placeholder="🔍 搜索推特 ID 或备注..."
+                style="margin-bottom: 12px; background: #f2f2f7; border: none; padding: 8px 12px; border-radius: 8px; font-size: 13px;">
+            <div id="rulesList" class="list-container"></div>
+        </div>
+
+        <div class="card">
+            <h4>规则管理 (JSON)</h4>
+            <div style="display: flex; gap: 10px;">
+                <button id="exportRulesBtn" class="outline">导出规则</button>
+                <button id="importRulesBtn" class="outline">导入规则</button>
+                <input type="file" id="importRulesFile" accept=".json" style="display: none;">
+            </div>
         </div>
     </div>
-
-    <div class="card" style="margin-bottom: 0;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h4 style="margin: 0;">已设置的专属音</h4>
+    
+    <!-- 钱包监控 Tab -->
+    <div id="tab-wallet" class="tab-content">
+        <div class="card">
+            <h4>💰 钱包监控设置</h4>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterBuy" checked> 买入(建仓/加仓)</label>
+                    <button id="testWalletBuyBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSell" checked> 卖出(清仓/减仓)</label>
+                    <button id="testWalletSellBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                <span style="font-size: 13px; color: var(--text-sec);">最小金额 ($):</span>
+                <input type="number" id="walletMinAmount" value="0" style="width: 80px; padding: 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main);">
+            </div>
+            <textarea id="walletDictInput" placeholder='请前往 GMGN 网页端，复制导出的带备注钱包 JSON 数据并粘贴至此处。' style="width: 100%; height: 80px; padding: 8px; border: 1px solid #d2d2d7; border-radius: 8px; background: transparent; color: var(--text-main); font-size: 12px; margin-bottom: 8px; box-sizing: border-box; resize: vertical;"></textarea>
+            <div style="display: flex; gap: 10px;">
+                <button id="importWalletDictBtn" class="outline">导入钱包</button>
+                <button id="clearWalletDictBtn" class="outline" style="color: #ff3b30; border-color: #ff3b30;">清空</button>
+            </div>
+            <div id="walletDictStatus" style="font-size: 12px; color: var(--text-sec); margin-top: 8px;">已导入: 0 个地址</div>
         </div>
-        <input type="text" id="searchInput" placeholder="🔍 搜索推特 ID 或备注..."
-            style="margin-bottom: 12px; background: #f2f2f7; border: none; padding: 8px 12px; border-radius: 8px; font-size: 13px;">
-        <div id="rulesList" class="list-container"></div>
+    </div>
+    
+    <!-- 系统设置 Tab -->
+    <div id="tab-settings" class="tab-content">
+        <div class="card">
+            <h4>系统控制</h4>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 14px; font-weight: 500;">总开关 (拦截所有通信)</span>
+                <label class="switch">
+                    <input type="checkbox" id="masterToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="volume-card" style="margin-bottom: 12px;">
+                <span>🔊 音量</span>
+                <input type="range" id="globalVolume" min="0" max="1" step="0.05" value="1">
+                <span id="volumePercent">100%</span>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 13px; color: var(--text-main);">🐦 推特监控</span>
+                <label class="switch" style="transform: scale(0.9);">
+                    <input type="checkbox" id="enableTwitterToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 13px; color: var(--text-main);">💰 钱包监控</span>
+                <label class="switch" style="transform: scale(0.9);">
+                    <input type="checkbox" id="enableWalletToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="card">
+            <h4>🤖 AI 音色设置</h4>
+            <div id="ttsConfigPanel" style="margin-top: 8px;">
+                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                    <select id="ttsVoiceSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                        <option value="zh-CN-XiaoxiaoNeural">晓晓 (甜美女生)</option>
+                        <option value="zh-CN-YunjianNeural">云健 (阳光男声)</option>
+                        <option value="zh-CN-XiaoyiNeural">晓伊 (职业干练)</option>
+                        <option value="en-US-AvaMultilingualNeural">Ava (多语种默认)</option>
+                    </select>
+                    <button id="ttsTestBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <select id="ttsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                        <option value="-10%">语速: 稍慢</option>
+                        <option value="+0%">语速: 正常</option>
+                        <option value="+15%">语速: 较快</option>
+                        <option value="+30%">语速: 极速</option>
+                    </select>
+                    <select id="ttsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                        <option value="-5%">音调: 偏低</option>
+                        <option value="+0%">音调: 正常</option>
+                        <option value="+5%">音调: 偏高</option>
+                    </select>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="modal-overlay" id="editModal">
@@ -633,5 +749,4 @@
     <script src="lib/jszip.min.js"></script>
     <script src="popup.js"></script>
 </body>
-
 </html>

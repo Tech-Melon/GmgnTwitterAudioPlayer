@@ -1,18 +1,31 @@
+let configCache = {};
+let isCacheReady = false;
+let pendingWsMessages = [];
+let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
+let isLockedByOtherTab = false;
+
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('inject.js') + '?v=' + Date.now();
 script.dataset.extVersion = chrome.runtime.getManifest().version;
 script.onload = function () { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 
-let configCache = {
-    mappings: {}, customAudios: {}, defaultAudio: "sounds/default.MP3", isMasterEnabled: true, globalVolume: 1.0,
-    eventFilters: { tweet: true, repost: true, reply: true, quote: true, other: true },
-    playDefaultUnmapped: true, // 🌟 新增开关缓存，默认开启
-    enableTTS: true, // 🌟 新增：语音播报博主名字开关，默认开启
-    ttsVoice: "zh-CN-XiaoxiaoNeural",
-    ttsRate: "+0%",
-    ttsPitch: "+0%"
-};
+    chrome.storage.local.get(null, (result) => {
+        configCache.isMasterEnabled = result.isMasterEnabled !== false;
+        configCache.enableTwitter = result.enableTwitter !== false;
+        configCache.enableWallet = result.enableWallet !== false;
+        configCache.globalVolume = result.globalVolume !== undefined ? result.globalVolume : 1.0;
+        configCache.mappings = result.twitterAudioMappings || {};
+        configCache.customAudios = result.customAudios || {};
+        configCache.eventFilters = result.eventFilters || { tweet: true, repost: true, reply: true, quote: true, other: true };
+        configCache.playDefaultUnmapped = result.playDefaultUnmapped !== false;
+        configCache.enableTTS = result.enableTTS !== false;
+        configCache.ttsVoice = result.ttsVoice || 'zh-CN-XiaoxiaoNeural';
+        configCache.ttsRate = result.ttsRate || '+0%';
+        configCache.ttsPitch = result.ttsPitch || '+0%';
+        configCache.walletFilters = result.walletFilters || { buy: true, sell: true, minAmount: 0 };
+        configCache.walletDictionary = result.walletDictionary || {};
+    });
 
 // 🌟 新增：配置你的 Cloudflare Worker TTS API 节点
 // 部署教程参考：https://github.com/DIYgod/cloudflare-edge-tts
@@ -114,10 +127,7 @@ function initPreloadCache() {
     console.log("🚀 [GMGN 盯盘伴侣] 音频底座预热完成，进入 0 毫秒响应待命状态！");
 }
 
-let isCacheReady = false;
-let pendingWsMessages = [];
-let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
-let isLockedByOtherTab = false;
+
 
 audioSyncChannel.onmessage = (event) => {
     if (event.data === 'PLAYING_AUDIO') {
@@ -151,10 +161,14 @@ document.addEventListener('visibilitychange', () => {
         };
 
         // 重新加载配置并预热音频
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch'], async (result) => {
+        try {
+            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'walletFilters', 'walletDictionary'], async (result) => {
+                if (chrome.runtime.lastError) return;
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
             if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
+            if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter;
+            if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet;
             if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
             if (result.eventFilters) configCache.eventFilters = result.eventFilters;
             if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
@@ -162,6 +176,8 @@ document.addEventListener('visibilitychange', () => {
             if (result.ttsVoice) configCache.ttsVoice = result.ttsVoice;
             if (result.ttsRate) configCache.ttsRate = result.ttsRate;
             if (result.ttsPitch) configCache.ttsPitch = result.ttsPitch;
+            if (result.walletFilters) configCache.walletFilters = result.walletFilters;
+            if (result.walletDictionary) configCache.walletDictionary = result.walletDictionary;
 
             if (result.customAudios) {
                 // 🔥 关键修复：回收旧的 Blob URL，防止内存泄漏
@@ -183,6 +199,13 @@ document.addEventListener('visibilitychange', () => {
                 customAudioCount: Object.keys(configCache.customAudios).length
             });
         });
+        } catch (e) {
+            if (e.message && e.message.includes('Extension context invalidated')) {
+                console.warn("🔄 [GMGN 盯盘伴侣] 插件已更新或重新加载，当前页面脚本已失效，请刷新页面以恢复监控！");
+            } else {
+                console.error(e);
+            }
+        }
     }
 
     lastVisibilityState = document.visibilityState;
@@ -208,10 +231,12 @@ async function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch'], async (result) => { // 🌟 数组加了高级定制选项
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'walletFilters', 'walletDictionary'], async (result) => { // 🌟 数组加了高级定制选项
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
+            if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter;
+            if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet;
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
 
     if (result.eventFilters) configCache.eventFilters = result.eventFilters;
@@ -223,6 +248,8 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     if (result.ttsVoice) configCache.ttsVoice = result.ttsVoice;
     if (result.ttsRate) configCache.ttsRate = result.ttsRate;
     if (result.ttsPitch) configCache.ttsPitch = result.ttsPitch;
+    if (result.walletFilters) configCache.walletFilters = result.walletFilters;
+    if (result.walletDictionary) configCache.walletDictionary = result.walletDictionary;
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
@@ -265,6 +292,8 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             configCache.isMasterEnabled = changes.isMasterEnabled.newValue;
             syncMasterToggle();
         }
+        if (changes.enableTwitter) configCache.enableTwitter = changes.enableTwitter.newValue;
+        if (changes.enableWallet) configCache.enableWallet = changes.enableWallet.newValue;
         // 🌟 监听开关变动更新缓存
         if (changes.playDefaultUnmapped) {
             configCache.playDefaultUnmapped = changes.playDefaultUnmapped.newValue;
@@ -275,6 +304,8 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.ttsVoice) configCache.ttsVoice = changes.ttsVoice.newValue;
         if (changes.ttsRate) configCache.ttsRate = changes.ttsRate.newValue;
         if (changes.ttsPitch) configCache.ttsPitch = changes.ttsPitch.newValue;
+        if (changes.walletFilters) configCache.walletFilters = changes.walletFilters.newValue;
+        if (changes.walletDictionary) configCache.walletDictionary = changes.walletDictionary.newValue;
         if (changes.customAudios) {
             const oldAudios = configCache.customAudios;
             for (const key in oldAudios) {
@@ -300,47 +331,67 @@ let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
 // 🎤 云端 TTS 极速播放引擎 (双层缓存架构)
-async function playNetworkTTS(text) {
-    if (!text || typeof text !== 'string') return;
+async function playNetworkTTS(textItems) {
+    const items = Array.isArray(textItems) ? textItems : [textItems];
+    if (items.length === 0 || !items[0]) return;
+    const text = items[0];
+    console.log("🔊 [GMGN 盯盘伴侣 - TTS] 播报:", items.join(' → '));
 
     try {
-        // 生成包含所有配置参数的独立缓存 Key，防止切换音色后播放旧缓存
-        const cacheKey = `${text}_${configCache.ttsVoice}_${configCache.ttsRate}_${configCache.ttsPitch}`;
-        
-        // 1. 本地极速缓存拦截 (0毫秒开销)
-        let blob = await idb.get(cacheKey);
+        const fetchAudioBlob = async (textChunk) => {
+            const cacheKey = `${textChunk}_${configCache.ttsVoice}_${configCache.ttsRate}_${configCache.ttsPitch}`;
+            let blob = await idb.get(cacheKey);
+            if (!blob) {
+                const url = `${CF_TTS_API}/tts`;
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: textChunk, voice: configCache.ttsVoice, rate: configCache.ttsRate, pitch: configCache.ttsPitch })
+                });
+                if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
+                blob = await res.blob();
+                await idb.set(cacheKey, blob);
+            }
+            return blob;
+        };
 
-        if (blob) {
-            console.log("⚡ [GMGN 盯盘伴侣 - TTS] 命中本地 IndexedDB，极速播放:", text);
-            playBlobAudio(blob);
-            return;
-        }
-
-        // 2. 边缘节点网络请求 (首次生成)
-        console.log("☁️ [GMGN 盯盘伴侣 - TTS] 向边缘节点请求新音频:", text);
-        // 注意：这里适配 DIYgod/cloudflare-edge-tts 接口协议 (POST /tts)
-        const url = `${CF_TTS_API}/tts`;
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                text: text,
-                voice: configCache.ttsVoice,
-                rate: configCache.ttsRate,
-                pitch: configCache.ttsPitch
-            })
+        const blob1 = await fetchAudioBlob(text);
+        const firstUrl = URL.createObjectURL(blob1);
+        const firstAudio = new Audio(firstUrl);
+        firstAudio.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
+        firstAudio.play().catch(e => { 
+            console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败:", e.name, e.message);
+            URL.revokeObjectURL(firstUrl); 
+            fallbackNativeTTS(text); 
         });
-        
-        if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
 
-        blob = await res.blob();
-
-        // 3. 存入本地永久缓存 (下次 0 延迟)
-        await idb.set(cacheKey, blob);
-        playBlobAudio(blob);
-
+        if (items.length > 1) {
+            const prefetchPromises = [];
+            for (let i = 1; i < items.length; i++) prefetchPromises.push(fetchAudioBlob(items[i]).catch(e => null));
+            const resolvedBlobs = Promise.all(prefetchPromises); // 只 resolve 一次，后续递归直接复用
+            
+            const playNext = async (index) => {
+                const blobList = await resolvedBlobs;
+                const nextBlob = blobList[index - 1];
+                if (!nextBlob) { return; }
+                const nextUrl = URL.createObjectURL(nextBlob);
+                const nextAudio = new Audio(nextUrl);
+                nextAudio.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
+                nextAudio.onended = () => { URL.revokeObjectURL(nextUrl); if (index + 1 < items.length) playNext(index + 1); };
+                nextAudio.onerror = () => { URL.revokeObjectURL(nextUrl); };
+                nextAudio.play().catch(e => {
+                    console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob后续播放失败:", e.name, e.message);
+                    URL.revokeObjectURL(nextUrl);
+                });
+            };
+            firstAudio.onended = () => { URL.revokeObjectURL(firstUrl); playNext(1); };
+            firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); playNext(1); };
+        } else {
+            firstAudio.onended = () => { URL.revokeObjectURL(firstUrl); };
+            firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); };
+        }
     } catch (error) {
-        console.error("❌ [GMGN 盯盘伴侣 - TTS] 网络/缓存播放异常，降级到浏览器原生TTS:", error);
+        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] playNetworkTTS 外层捕获错误:", error);
         fallbackNativeTTS(text);
     }
 }
@@ -379,7 +430,8 @@ function fallbackNativeTTS(text) {
         return playFinalFallback();
     }
     
-    window.speechSynthesis.cancel();
+    // 如果并发播放，cancel 会把正在播放的原生 TTS 切掉，导致 onerror 并触发报警，因此将其注释掉
+    // window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
     utterance.rate = 1.0;
@@ -388,7 +440,7 @@ function fallbackNativeTTS(text) {
     
     // 🚀 如果连浏览器原生 TTS 都报错失败，则祭出最后一张底牌：默认提示音
     utterance.onerror = (e) => {
-        console.error("❌ [GMGN 盯盘伴侣 - TTS] 原生 TTS 发生错误:", e);
+        console.error("❌ [GMGN 盯盘伴侣 - TTS] 原生 TTS 发生错误:", e.error, e);
         playFinalFallback();
     };
 
@@ -647,7 +699,7 @@ function handleTwitterMsg(e) {
         return;
     }
 
-    if (!configCache.isMasterEnabled || isLockedByOtherTab) return;
+    if (!configCache.isMasterEnabled || !configCache.enableTwitter || isLockedByOtherTab) return;
     if (!isCacheReady) {
         pendingWsMessages.push(e);
         return;
@@ -667,3 +719,48 @@ function handleTwitterMsg(e) {
 }
 
 window.addEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
+
+const walletLastPlayed = new Map();
+window.addEventListener('GMGN_WALLET_MSG', async function (e) {
+    if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
+    const item = e.detail;
+    if (!item || !item.m || !item.bs) return; // 'm' is maker, 'bs' is token symbol
+    
+    const maker = item.m.toLowerCase();
+    const tokenSymbol = item.bs || '代币';
+    const amountUSD = parseFloat(item.tu) || parseFloat(item.cu) || 0;
+    const action = item.s;
+
+    if (action !== 'buy' && action !== 'sell') return; // 只关心买卖动作
+
+    if (configCache.walletFilters && amountUSD < configCache.walletFilters.minAmount) return;
+    if (action === 'buy' && configCache.walletFilters && configCache.walletFilters.buy === false) return;
+    if (action === 'sell' && configCache.walletFilters && configCache.walletFilters.sell === false) return;
+
+    if (!configCache.walletDictionary) return;
+    const walletInfo = configCache.walletDictionary[maker];
+    if (!walletInfo || !walletInfo.rename || walletInfo.rename.trim() === "") return; // 没有备注的则不播报
+    
+    let rename = walletInfo.rename.trim();
+
+    // 根据交易哈希(h)进行精准去重，防止 processed 和 confirm 阶段重复播报
+    const txHash = item.h;
+    if (txHash) {
+        if (walletLastPlayed.has(txHash)) return;
+        walletLastPlayed.set(txHash, true);
+        // 定期清理防爆内存（Map 保证插入顺序，FIFO 淘汰最老的一半）
+        if (walletLastPlayed.size > 2000) {
+            const iter = walletLastPlayed.keys();
+            for (let i = 0; i < 1000; i++) walletLastPlayed.delete(iter.next().value);
+        }
+    } else {
+        const dbKey = `${maker}_${action}_${tokenSymbol}`;
+        const now = Date.now();
+        if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
+        walletLastPlayed.set(dbKey, now);
+    }
+
+    let actionText = action === 'buy' ? '买入' : '卖出';
+
+    playNetworkTTS([`${rename}${actionText}`, tokenSymbol]);
+});

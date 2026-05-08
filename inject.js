@@ -18,7 +18,9 @@
         ws.addEventListener('message', function (event) {
             if (!window.__GMGN_AUDIO_ENABLED) return;
             if (typeof event.data !== 'string') return;
-            if (!event.data.includes('twitter_user_monitor_basic')) return;
+            const isTwitter = event.data.includes('twitter_user_monitor_basic');
+            const isWallet = event.data.includes('following_wallet_activity');
+            if (!isTwitter && !isWallet) return;
 
             try {
                 let payloadStr = event.data.replace(/^\d+/, '');
@@ -56,6 +58,13 @@
                             detail: { triggers: triggersArray }
                         }));
                     }
+                } else if (parsed && parsed.channel === 'following_wallet_activity' && parsed.data && Array.isArray(parsed.data)) {
+                    parsed.data.forEach(item => {
+                        // 取消 cnt === "processed" 的过滤，交由 content.js 基于 txHash 进行去重，防止部分交易只有 confirm 导致漏播
+                        window.dispatchEvent(new CustomEvent('GMGN_WALLET_MSG', {
+                            detail: item
+                        }));
+                    });
                 }
             } catch (error) {
                 console.error("❌ [GMGN 盯盘伴侣 - Inject] 数据解析异常:", error, event.data);

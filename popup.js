@@ -1,12 +1,37 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // ☁️ Cloudflare Edge-TTS Worker API 统一入口
+    const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
+
     // 极简 HTML 转义工具
     const escapeHTML = (str) => String(str).replace(/[&<>'"]/g,
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
     );
 
+    // 🌟 Tab 切换逻辑（带状态持久化，重新打开插件时保留上次页面）
+    const switchTab = (tabId) => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        if (btn) btn.classList.add('active');
+        const panel = document.getElementById(tabId);
+        if (panel) panel.classList.add('active');
+        chrome.storage.local.set({ popupActiveTab: tabId });
+    };
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => switchTab(e.target.dataset.tab));
+    });
+
+    // 恢复上次活跃的 Tab
+    chrome.storage.local.get(['popupActiveTab'], (result) => {
+        if (result.popupActiveTab) switchTab(result.popupActiveTab);
+    });
+
     // 极客版可搜索下拉框的核心驱动函数
     const els = {
         masterToggle: document.getElementById('masterToggle'),
+        enableTwitterToggle: document.getElementById('enableTwitterToggle'),
+        enableWalletToggle: document.getElementById('enableWalletToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
         enableTTSToggle: document.getElementById('enableTTSToggle'), // 🌟 新增的 TTS 开关
         ttsVoiceSelect: document.getElementById('ttsVoiceSelect'),
@@ -39,7 +64,18 @@ document.addEventListener('DOMContentLoaded', () => {
         filterRepost: document.getElementById('filterRepost'),
         filterReply: document.getElementById('filterReply'),
         filterQuote: document.getElementById('filterQuote'),
-        filterOther: document.getElementById('filterOther') // 🌟 新增
+        filterOther: document.getElementById('filterOther'),
+
+        // Wallet Elements
+        filterBuy: document.getElementById('filterBuy'),
+        filterSell: document.getElementById('filterSell'),
+        testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
+        testWalletSellBtn: document.getElementById('testWalletSellBtn'),
+        walletMinAmount: document.getElementById('walletMinAmount'),
+        walletDictInput: document.getElementById('walletDictInput'),
+        importWalletDictBtn: document.getElementById('importWalletDictBtn'),
+        clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
+        walletDictStatus: document.getElementById('walletDictStatus')
     };
 
     function showToast(message, duration = 2000) {
@@ -108,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function loadData() {
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch'], (result) => {
+        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'walletFilters', 'walletDictionary'], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
 
@@ -116,12 +152,31 @@ document.addEventListener('DOMContentLoaded', () => {
             const filters = result.eventFilters || { tweet: true, repost: true, reply: true, quote: true, other: true };
 
             els.masterToggle.checked = result.isMasterEnabled !== false;
+            els.enableTwitterToggle.checked = result.enableTwitter !== false;
+            els.enableWalletToggle.checked = result.enableWallet !== false;
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
 
             if (result.ttsVoice) els.ttsVoiceSelect.value = result.ttsVoice;
-            if (result.ttsRate) els.ttsRateSelect.value = result.ttsRate;
-            if (result.ttsPitch) els.ttsPitchSelect.value = result.ttsPitch;
+            if (result.ttsRate) {
+                let r = String(result.ttsRate);
+                let migrated = false;
+                if(r === '1.0' || r === '1') { r = '+0%'; migrated = true; }
+                else if(r === '0.9') { r = '-10%'; migrated = true; }
+                else if(r === '1.15') { r = '+15%'; migrated = true; }
+                else if(r === '1.3') { r = '+30%'; migrated = true; }
+                els.ttsRateSelect.value = r;
+                if (migrated) chrome.storage.local.set({ ttsRate: r });
+            }
+            if (result.ttsPitch) {
+                let p = String(result.ttsPitch);
+                let migrated = false;
+                if(p === '0Hz' || p === '0') { p = '+0%'; migrated = true; }
+                else if(p === '-20Hz') { p = '-5%'; migrated = true; }
+                else if(p === '+20Hz') { p = '+5%'; migrated = true; }
+                els.ttsPitchSelect.value = p;
+                if (migrated) chrome.storage.local.set({ ttsPitch: p });
+            }
 
             // 🌟 联动子集 UI：如果总开关关闭，则把子开关置灰并禁用
             const ttsSubSetting = document.getElementById('ttsSubSetting');
@@ -139,6 +194,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 els.globalVolume.value = result.globalVolume;
                 els.volumePercent.textContent = Math.round(result.globalVolume * 100) + '%';
             }
+
+            const walletFilters = result.walletFilters || { buy: true, sell: true, minAmount: 0 };
+            els.filterBuy.checked = walletFilters.buy !== false;
+            els.filterSell.checked = walletFilters.sell !== false;
+            els.walletMinAmount.value = walletFilters.minAmount || 0;
+
+            const walletDictionary = result.walletDictionary || {};
+            els.walletDictStatus.textContent = `已导入: ${Object.keys(walletDictionary).length} 个地址`;
 
             // 🌟 渲染音频列表给自定义下拉框
             const defaultOptions = [
@@ -384,13 +447,44 @@ document.addEventListener('DOMContentLoaded', () => {
     els.ttsRateSelect.addEventListener('change', saveTTSConfig);
     els.ttsPitchSelect.addEventListener('change', saveTTSConfig);
 
+    
+    // 🌟 钱包专属试听逻辑
+    const playWalletTTS = async (text) => {
+        const voice = els.ttsVoiceSelect.value;
+        const rate = els.ttsRateSelect.value;
+        const pitch = els.ttsPitchSelect.value;
+        els.toast.textContent = "生成语音中...";
+        els.toast.classList.add('show');
+        try {
+            const url = CF_TTS_API;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice, rate, pitch })
+            });
+            if (!res.ok) throw new Error("TTS Request Failed");
+            const blob = await res.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+            audio.volume = Math.min(parseFloat(els.globalVolume.value), 1);
+            audio.play();
+            els.toast.classList.remove('show');
+        } catch (e) {
+            console.error(e);
+            showToast("TTS生成失败");
+        }
+    };
+
+    els.testWalletBuyBtn.addEventListener('click', () => playWalletTTS("技术瓜买入比特币"));
+    els.testWalletSellBtn.addEventListener('click', () => playWalletTTS("技术瓜卖出比特币"));
+
     els.ttsTestBtn.addEventListener('click', async () => {
         const text = "技术瓜发推啦";
         const voice = els.ttsVoiceSelect.value;
         const rate = els.ttsRateSelect.value;
         const pitch = els.ttsPitchSelect.value;
         try {
-            const url = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
+            const url = CF_TTS_API;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -470,6 +564,8 @@ document.addEventListener('DOMContentLoaded', () => {
     els.globalVolume.addEventListener('input', (e) => { els.volumePercent.textContent = Math.round(e.target.value * 100) + '%'; });
     els.globalVolume.addEventListener('change', (e) => { chrome.storage.local.set({ globalVolume: parseFloat(e.target.value) }); });
     els.masterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ isMasterEnabled: e.target.checked }, () => { showToast(e.target.checked ? '监听已开启' : '监听已暂停'); }); });
+    els.enableTwitterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableTwitter: e.target.checked }, () => { showToast(e.target.checked ? '推特监控已开启' : '推特监控已关闭'); }); });
+    els.enableWalletToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableWallet: e.target.checked }, () => { showToast(e.target.checked ? '钱包监控已开启' : '钱包监控已关闭'); }); });
     els.playDefaultToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
             showToast(e.target.checked ? '已开启默认音频' : '已关闭默认音频');
@@ -658,5 +754,56 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     els.cancelEditBtn.addEventListener('click', () => els.editModal.style.display = 'none');
+
+    // 🌟 钱包监控设置保存
+    const saveWalletFilters = () => {
+        chrome.storage.local.set({
+            walletFilters: {
+                buy: els.filterBuy.checked,
+                sell: els.filterSell.checked,
+                minAmount: parseFloat(els.walletMinAmount.value) || 0
+            }
+        });
+    };
+
+    els.filterBuy.addEventListener('change', saveWalletFilters);
+    els.filterSell.addEventListener('change', saveWalletFilters);
+    els.walletMinAmount.addEventListener('change', saveWalletFilters);
+
+    els.importWalletDictBtn.addEventListener('click', () => {
+        const text = els.walletDictInput.value.trim();
+        if (!text) return showToast('请输入 JSON 数据');
+        try {
+            const data = JSON.parse(text);
+            const items = Array.isArray(data) ? data : [data];
+            chrome.storage.local.get(['walletDictionary'], (result) => {
+                const dict = result.walletDictionary || {};
+                let count = 0;
+                items.forEach(item => {
+                    if (item.address && item.rename) {
+                        dict[item.address.toLowerCase()] = { rename: item.rename };
+                        count++;
+                    }
+                });
+                chrome.storage.local.set({ walletDictionary: dict }, () => {
+                    showToast(`成功导入 ${count} 个钱包地址`);
+                    els.walletDictInput.value = '';
+                    loadData();
+                });
+            });
+        } catch (e) {
+            showToast('JSON 格式错误: ' + e.message, 3000);
+        }
+    });
+
+    els.clearWalletDictBtn.addEventListener('click', () => {
+        if (confirm('确定要清空所有钱包地址映射吗？')) {
+            chrome.storage.local.set({ walletDictionary: {} }, () => {
+                showToast('已清空');
+                loadData();
+            });
+        }
+    });
+
     loadData();
 });
