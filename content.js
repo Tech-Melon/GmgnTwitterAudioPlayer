@@ -11,6 +11,41 @@ let configCache = {
     enableTTS: true // 🌟 新增：语音播报博主名字开关，默认开启
 };
 
+// 🌟 新增：配置你的 Cloudflare Worker TTS API 节点
+// 部署教程参考：https://github.com/DIYgod/cloudflare-edge-tts
+const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev";
+const CF_TTS_VOICE = "zh-CN-XiaoxiaoNeural"; // 微软极品女声 晓晓
+
+// 🌟 极速双缓存引擎：IndexedDB 本地持久化
+const idb = {
+    db: null,
+    async init() {
+        if (this.db) return this.db;
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('GMGNTTSCache', 1);
+            req.onupgradeneeded = (e) => e.target.result.createObjectStore('audio', { keyPath: 'text' });
+            req.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
+            req.onerror = () => reject(req.error);
+        });
+    },
+    async get(text) {
+        await this.init();
+        return new Promise((resolve, reject) => {
+            const req = this.db.transaction('audio', 'readonly').objectStore('audio').get(text);
+            req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+            req.onerror = () => reject(req.error);
+        });
+    },
+    async set(text, blob) {
+        await this.init();
+        return new Promise((resolve, reject) => {
+            const req = this.db.transaction('audio', 'readwrite').objectStore('audio').put({ text, blob, ts: Date.now() });
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+    }
+};
+
 // 🌟 新增核心：极速内存预热引擎
 let preloadedAudios = new Map();
 let isRebuildingBlob = false; // 🌟 新增：全局 Blob 重建锁
@@ -96,15 +131,15 @@ let lastVisibilityChangeTime = Date.now();
 document.addEventListener('visibilitychange', () => {
     const now = Date.now();
     const hiddenDuration = now - lastVisibilityChangeTime;
-    
+
     // 只有当页面隐藏超过 5 分钟（300000ms）才认为可能是休眠，否则只是普通的标签切换
     if (lastVisibilityState === 'hidden' && document.visibilityState === 'visible' && hiddenDuration > 300000) {
         console.log("🔄 [GMGN 盯盘伴侣] 检测到长时间休眠恢复，正在重新初始化音频系统...");
-        
+
         // 重新创建 BroadcastChannel（可能已断开）
         try {
             audioSyncChannel.close();
-        } catch (e) {}
+        } catch (e) { }
         audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
         audioSyncChannel.onmessage = (event) => {
             if (event.data === 'PLAYING_AUDIO') {
@@ -112,7 +147,7 @@ document.addEventListener('visibilitychange', () => {
                 setTimeout(() => { isLockedByOtherTab = false; }, 2000);
             }
         };
-        
+
         // 重新加载配置并预热音频
         chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS'], async (result) => {
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
@@ -122,7 +157,7 @@ document.addEventListener('visibilitychange', () => {
             if (result.eventFilters) configCache.eventFilters = result.eventFilters;
             if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
             if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
-            
+
             if (result.customAudios) {
                 // 🔥 关键修复：回收旧的 Blob URL，防止内存泄漏
                 for (const key in configCache.customAudios) {
@@ -131,11 +166,11 @@ document.addEventListener('visibilitychange', () => {
                         URL.revokeObjectURL(oldData);
                     }
                 }
-                
+
                 configCache.customAudios = result.customAudios;
                 await convertBase64ToBlobUrl(configCache.customAudios);
             }
-            
+
             initPreloadCache();
             syncMasterToggle();
             console.log("✅ [GMGN 盯盘伴侣] 音频系统恢复完成:", {
@@ -144,7 +179,7 @@ document.addEventListener('visibilitychange', () => {
             });
         });
     }
-    
+
     lastVisibilityState = document.visibilityState;
     lastVisibilityChangeTime = now;
 });
@@ -188,7 +223,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
 
     // 🌟 在数据加载完毕后，立刻执行预热
     initPreloadCache();
-    warmupTTSVoice(); // 🎤 预热 TTS 语音引擎
+    // warmupTTSVoice(); 已废弃，现采用双层缓存网络 TTS
 
     syncMasterToggle();
     isCacheReady = true;
@@ -253,96 +288,95 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
-// 🎤 TTS 语音预热与缓存机制（极致性能优化）
-let cachedTTSVoice = null;
-let isTTSVoiceReady = false;
+// 🎤 云端 TTS 极速播放引擎 (双层缓存架构)
+async function playNetworkTTS(text) {
+    if (!text || typeof text !== 'string') return;
 
-// 🚀 语音引擎预热函数：在页面加载时立刻执行，消除首次延迟
-function warmupTTSVoice() {
-    if (!('speechSynthesis' in window)) return;
-    
-    // 🔥 关键优化：监听 voiceschanged 事件，确保语音列表完全加载后再缓存
-    const selectBestVoice = () => {
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length === 0) return; // 语音列表未就绪，等待下次触发
-        
-        const preferredVoices = [
-            'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)',
-            'Microsoft Yunyang Online (Natural) - Chinese (Mainland)',
-            'Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)',
-            'Google 國語（臺灣）',
-            'Google 普通话（中国大陆）',
-            'Microsoft Huihui - Chinese (Simplified, PRC)',
-            'Microsoft Yaoyao - Chinese (Simplified, PRC)',
-            'Ting-Ting',
-            'Sin-ji'
-        ];
-        
-        for (const preferredName of preferredVoices) {
-            const voice = voices.find(v => v.name.includes(preferredName) || v.name === preferredName);
-            if (voice) {
-                cachedTTSVoice = voice;
-                isTTSVoiceReady = true;
-                console.log("🎤 [GMGN 盯盘伴侣 - TTS] 语音预热完成:", voice.name);
-                return;
-            }
+    try {
+        // 1. 本地极速缓存拦截 (0毫秒开销)
+        let blob = await idb.get(text);
+
+        if (blob) {
+            console.log("⚡ [GMGN 盯盘伴侣 - TTS] 命中本地 IndexedDB，极速播放:", text);
+            playBlobAudio(blob);
+            return;
         }
+
+        // 2. 边缘节点网络请求 (首次生成)
+        console.log("☁️ [GMGN 盯盘伴侣 - TTS] 向边缘节点请求新音频:", text);
+        // 注意：这里适配 DIYgod/cloudflare-edge-tts 接口协议 (POST /tts)
+        const url = `${CF_TTS_API}/tts`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                text: text,
+                voice: CF_TTS_VOICE
+            })
+        });
         
-        // 降级：选择任意中文语音
-        const fallbackVoice = voices.find(v => v.lang.startsWith('zh'));
-        if (fallbackVoice) {
-            cachedTTSVoice = fallbackVoice;
-            isTTSVoiceReady = true;
-            console.log("🎤 [GMGN 盯盘伴侣 - TTS] 使用降级语音:", fallbackVoice.name);
-        }
-    };
-    
-    // 立即尝试获取（某些浏览器同步返回）
-    selectBestVoice();
-    
-    // 监听异步加载完成事件（Chrome/Edge 需要）
-    if (!isTTSVoiceReady) {
-        window.speechSynthesis.addEventListener('voiceschanged', selectBestVoice, { once: true });
+        if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
+
+        blob = await res.blob();
+
+        // 3. 存入本地永久缓存 (下次 0 延迟)
+        await idb.set(text, blob);
+        playBlobAudio(blob);
+
+    } catch (error) {
+        console.error("❌ [GMGN 盯盘伴侣 - TTS] 网络/缓存播放异常，降级到浏览器原生TTS:", error);
+        fallbackNativeTTS(text);
     }
 }
 
-// 🎤 TTS 语音合成函数（极速版：0 延迟启动）
-function speakText(text) {
-    if (!text || typeof text !== 'string') {
-        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播报文本无效:", text);
-        return;
+function playBlobAudio(blob) {
+    const url = URL.createObjectURL(blob);
+    const player = new Audio(url);
+    // TTS 语音稍微放大一点，防止被提示音完全盖住
+    player.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
+
+    player.addEventListener('ended', () => {
+        URL.revokeObjectURL(url); // 阅后即焚，释放内存
+        player.removeAttribute('src');
+        player.load();
+    });
+
+    player.play().catch(e => {
+        console.error("❌ [GMGN 盯盘伴侣 - TTS] Blob音频播放失败，启用默认铃声兜底", e);
+        // 🚀 核心逻辑修改：如果连下载好的音频都无法播放，只能使用默认铃声兜底了
+        if (typeof playConcurrentAudio === 'function') {
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+        }
+    });
+}
+
+// 兜底方案：如果没配 Worker 或者断网了，回退到以前的原生 TTS
+function fallbackNativeTTS(text) {
+    const playFinalFallback = () => {
+        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 终极降级：播放默认提示音");
+        if (typeof playConcurrentAudio === 'function') {
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+        }
+    };
+
+    if (!('speechSynthesis' in window)) {
+        return playFinalFallback();
     }
     
-    if (!('speechSynthesis' in window)) {
-        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 当前浏览器不支持语音合成");
-        return;
-    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    utterance.rate = 1.0;
+    utterance.pitch = 1.05;
+    utterance.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
+    
+    // 🚀 如果连浏览器原生 TTS 都报错失败，则祭出最后一张底牌：默认提示音
+    utterance.onerror = (e) => {
+        console.error("❌ [GMGN 盯盘伴侣 - TTS] 原生 TTS 发生错误:", e);
+        playFinalFallback();
+    };
 
-    try {
-        window.speechSynthesis.cancel(); // 🛑 清空历史积压队列
-        const utterance = new SpeechSynthesisUtterance(text);
-        
-        utterance.lang = 'zh-CN';
-        
-        // 🚀 核心优化：直接使用预热缓存的语音，跳过耗时的查找过程
-        if (isTTSVoiceReady && cachedTTSVoice) {
-            utterance.voice = cachedTTSVoice;
-        }
-        
-        // 🔥 优化语音参数
-        utterance.rate = 1.00;
-        utterance.pitch = 1.05;
-        utterance.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
-        
-        utterance.onerror = (event) => {
-            console.error("❌ [GMGN 盯盘伴侣 - TTS] 播报失败:", event);
-        };
-        
-        window.speechSynthesis.speak(utterance);
-        
-    } catch (error) {
-        console.error("❌ [GMGN 盯盘伴侣 - TTS] 播报异常:", error);
-    }
+    window.speechSynthesis.speak(utterance);
 }
 
 function processTwitterMessage(e) {
@@ -403,7 +437,7 @@ function processTwitterMessage(e) {
             } else {
                 // 🎤 内置音频：区分通用提示音和人物专属音
                 vipAudioSrc = chrome.runtime.getURL(`sounds/${mappedAudioId}`);
-                
+
                 // 只有通用提示音才需要 TTS，人物专属音频不需要
                 const genericSounds = ['default.MP3', 'preset1.MP3'];
                 if (configCache.enableTTS && genericSounds.includes(mappedAudioId)) {
@@ -412,8 +446,10 @@ function processTwitterMessage(e) {
                     if (typeof rule === 'object' && rule !== null && rule.remark) {
                         speakerName = rule.remark;
                     }
-                    
+
                     ttsInfo = `${speakerName} 发推啦`;
+                    // 🚀 如果开启了 TTS，则完全抛弃原有的兜底铃声，只保留 TTS
+                    vipAudioSrc = null; 
                 }
             }
         } else {
@@ -429,7 +465,7 @@ function processTwitterMessage(e) {
     const playConcurrentAudio = (src, ttsText = null) => {
         let player;
         const cachedAudio = preloadedAudios.get(src);
-        
+
         // 检查缓存的音频是否健康
         if (cachedAudio && checkAudioHealth(cachedAudio)) {
             // cloneNode(true) 能以微秒级速度直接拷贝已解码的音频节点结构
@@ -506,16 +542,12 @@ function processTwitterMessage(e) {
             player = null; // 切断 JS 引用，立刻交由 GC 回收
         };
 
-        // 🎤 如果需要 TTS 播报，在音频播放结束后触发
+        // 🚀 彻底打破串行！并发执行 TTS，毫不等待提示音结束
         if (ttsText) {
-            player.addEventListener('ended', () => {
-                speakText(ttsText);
-                cleanup();
-            });
-        } else {
-            player.addEventListener('ended', cleanup);
+            playNetworkTTS(ttsText);
         }
-        
+        player.addEventListener('ended', cleanup);
+
         player.addEventListener('error', cleanup);
 
         player.play().catch(err => {
@@ -535,6 +567,11 @@ function processTwitterMessage(e) {
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             playConcurrentAudio(vipAudioSrc, ttsInfo); // 🎤 传入 TTS 文本
+        } else if (ttsInfo) {
+            // 🚀 新增分支：只有纯 TTS，没有任何前置铃声
+            globalLastPlayTime = now;
+            audioSyncChannel.postMessage('PLAYING_AUDIO');
+            playNetworkTTS(ttsInfo);
         } else if (vipFallbackDefault) {
             // 降级情况：文件丢失被迫使用默认音 (不受新开关影响，照常播放)
             globalLastPlayTime = now;
@@ -546,19 +583,24 @@ function processTwitterMessage(e) {
             if (configCache.playDefaultUnmapped && (now - globalLastPlayTime > 2000)) {
                 globalLastPlayTime = now;
                 audioSyncChannel.postMessage('PLAYING_AUDIO');
-                
-                // 🎤 未匹配规则时，如果开启了 TTS，播报博主名字
+
+                // 🎤 检查是否开启了 TTS，提取触发者名称
                 let unmappedTTS = null;
                 if (configCache.enableTTS) {
-                    // 从 triggers 中提取第一个触发者的显示名称作为播报对象
                     const firstTrigger = e.detail.triggers.find(t => t && typeof t.id === 'string');
                     if (firstTrigger) {
                         const speakerName = firstTrigger.name || firstTrigger.id.trim();
                         unmappedTTS = `${speakerName} 发推啦`;
                     }
                 }
-                
-                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), unmappedTTS);
+
+                // 🚀 核心逻辑修改：如果启用了 TTS 并成功生成了播报文本，则【只播放 TTS 人声】，彻底抛弃 default.MP3
+                if (unmappedTTS) {
+                    playNetworkTTS(unmappedTTS);
+                } else {
+                    // 如果关闭了 TTS 开关，则降级为只播放默认的“推特新消息” MP3
+                    playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+                }
             }
         }
     } catch (error) {

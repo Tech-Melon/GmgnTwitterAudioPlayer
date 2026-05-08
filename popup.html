@@ -504,15 +504,15 @@
 
     <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h4 style="margin: 0;">播放默认音频</h4>
+            <h4 style="margin: 0;">未备注账号发推提醒</h4>
             <label class="switch">
                 <input type="checkbox" id="playDefaultToggle" checked>
                 <span class="slider"></span>
             </label>
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h4 style="margin: 0;">默认音频下，播报推特ID</h4>
-            <label class="switch">
+        <div id="ttsSubSetting" style="display: flex; justify-content: space-between; align-items: center; padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; transition: opacity 0.3s ease;">
+            <h4 style="margin: 0; font-size: 13px; color: var(--text-sec);">↳ 使用 AI 语音念昵称 (替代默认提示音)</h4>
+            <label class="switch" style="transform: scale(0.9); transform-origin: right center;">
                 <input type="checkbox" id="enableTTSToggle" checked>
                 <span class="slider"></span>
             </label>

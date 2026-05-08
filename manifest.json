@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "GMGN 盯盘伴侣",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "高度可定制的GMGN twitter音频播报插件(X: 0xTechMelon)",
     "icons": {
         "16": "images/icon16.png",
@@ -16,15 +16,26 @@
             "128": "images/icon128.png"
         }
     },
-    "permissions": ["storage", "unlimitedStorage"],
-    "host_permissions": ["*://*.gmgn.ai/*", "*://gmgn.ai/*"],
+    "permissions": [
+        "storage",
+        "unlimitedStorage"
+    ],
+    "host_permissions": [
+        "*://*.gmgn.ai/*",
+        "*://gmgn.ai/*"
+    ],
     "background": {
         "service_worker": "background.js"
     },
     "content_scripts": [
         {
-            "matches": ["*://*.gmgn.ai/*", "*://gmgn.ai/*"],
-            "js": ["content.js"],
+            "matches": [
+                "*://*.gmgn.ai/*",
+                "*://gmgn.ai/*"
+            ],
+            "js": [
+                "content.js"
+            ],
             "run_at": "document_start"
         }
     ],
@@ -38,7 +49,10 @@
                 "sounds/cz.MP3",
                 "sounds/heyi.MP3"
             ],
-            "matches": ["*://*.gmgn.ai/*", "*://gmgn.ai/*"]
+            "matches": [
+                "*://*.gmgn.ai/*",
+                "*://gmgn.ai/*"
+            ]
         }
     ]
 }

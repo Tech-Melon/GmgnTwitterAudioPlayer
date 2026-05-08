@@ -112,9 +112,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const filters = result.eventFilters || { tweet: true, repost: true, reply: true, quote: true, other: true };
 
             els.masterToggle.checked = result.isMasterEnabled !== false;
-            // 🌟 默认勾选，所以当 undefined 时也为 true
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
+
+            // 🌟 联动子集 UI：如果总开关关闭，则把子开关置灰并禁用
+            const ttsSubSetting = document.getElementById('ttsSubSetting');
+            if (ttsSubSetting) {
+                ttsSubSetting.style.opacity = els.playDefaultToggle.checked ? '1' : '0.4';
+                ttsSubSetting.style.pointerEvents = els.playDefaultToggle.checked ? 'auto' : 'none';
+            }
             els.filterTweet.checked = filters.tweet !== false;
             els.filterRepost.checked = filters.repost !== false;
             els.filterReply.checked = filters.reply !== false;
@@ -244,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         let audioSrc;
                         let needsTTS = false;
                         let ttsText = '';
-                        
+
                         if (audioId.startsWith('custom_')) {
                             // 自定义音频：只播放，不 TTS
                             if (customAudios[audioId]) {
@@ -256,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else {
                             // 内置音频
                             audioSrc = chrome.runtime.getURL(`sounds/${audioId}`);
-                            
+
                             // 🔥 关键修复：只有通用提示音才需要 TTS，人物专属音频不需要
                             // 🌟 新增：检查全局 TTS 开关（使用 els.enableTTSToggle 直接读取当前状态）
                             const genericSounds = ['default.MP3', 'preset1.MP3'];
@@ -264,54 +270,50 @@ document.addEventListener('DOMContentLoaded', () => {
                                 needsTTS = true;
                                 const speakerName = remark || twitterId;
                                 ttsText = `${speakerName} 发推啦`;
+                                // 🚀 如果启用 TTS，就抛弃默认铃声，纯听 TTS
+                                audioSrc = null;
                             }
                         }
-                        
-                        const audio = new Audio(audioSrc);
-                        audio.volume = parseFloat(els.globalVolume.value);
-                        
-                        if (needsTTS && 'speechSynthesis' in window) {
-                            // 音频播放完成后触发 TTS
-                            audio.addEventListener('ended', () => {
-                                const utterance = new SpeechSynthesisUtterance(ttsText);
-                                utterance.lang = 'zh-CN';
-                                
-                                // 🎤 选择更自然的中文语音
-                                const voices = window.speechSynthesis.getVoices();
-                                const preferredVoices = [
-                                    'Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)',
-                                    'Microsoft Yunyang Online (Natural) - Chinese (Mainland)',
-                                    'Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)',
-                                    'Google 國語（臺灣）',
-                                    'Google 普通话（中国大陆）',
-                                    'Microsoft Huihui - Chinese (Simplified, PRC)',
-                                    'Microsoft Yaoyao - Chinese (Simplified, PRC)',
-                                    'Ting-Ting',
-                                    'Sin-ji'
-                                ];
-                                
-                                let selectedVoice = null;
-                                for (const preferredName of preferredVoices) {
-                                    selectedVoice = voices.find(v => v.name.includes(preferredName) || v.name === preferredName);
-                                    if (selectedVoice) break;
-                                }
-                                
-                                if (!selectedVoice) {
-                                    selectedVoice = voices.find(v => v.lang.startsWith('zh'));
-                                }
-                                
-                                if (selectedVoice) utterance.voice = selectedVoice;
-                                
-                                // 🔥 优化语音参数：提升音量和清晰度
-                                // 微调建议：
-                                window.speechSynthesis.cancel(); // 🛑 新增：打断正在播放的试听，防止疯狂连点导致排队
-                                utterance.rate = 1.00;  // 稍微放慢一点语速，显得更从容清晰
-                                utterance.pitch = 1.05; // 稍微拉高一点点音调，让声音听起来更有活力
-                                utterance.volume = Math.min(parseFloat(els.globalVolume.value) * 1.5, 1.0); // 🔥 音量提升 50%
-                                window.speechSynthesis.speak(utterance);
-                            });
+
+                        const playEdgeTTS = async () => {
+                            try {
+                                const url = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
+                                const res = await fetch(url, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        text: ttsText,
+                                        voice: "zh-CN-XiaoxiaoNeural"
+                                    })
+                                });
+                                if (!res.ok) throw new Error("TTS Request Failed");
+                                const blob = await res.blob();
+                                const audioUrl = URL.createObjectURL(blob);
+                                const audio = new Audio(audioUrl);
+                                audio.volume = Math.min(parseFloat(els.globalVolume.value) * 1.5, 1.0);
+                                audio.addEventListener('ended', () => {
+                                    URL.revokeObjectURL(audioUrl);
+                                    audio.removeAttribute('src');
+                                    audio.load();
+                                });
+                                audio.play().catch(e => showToast('TTS 播放失败'));
+                            } catch (e) {
+                                showToast('网络 TTS 失败，请检查连接');
+                            }
+                        };
+
+                        if (audioSrc) {
+                            const audio = new Audio(audioSrc);
+                            audio.volume = parseFloat(els.globalVolume.value);
+
+                            if (needsTTS) {
+                                audio.addEventListener('ended', playEdgeTTS);
+                            }
+                            audio.play().catch(err => showToast('播放失败'));
+                        } else if (needsTTS) {
+                            // 纯 TTS 试听
+                            playEdgeTTS();
                         }
-                        audio.play().catch(err => showToast('播放失败'));
                     });
 
                     div.querySelector('.del').addEventListener('click', () => {
@@ -421,8 +423,14 @@ document.addEventListener('DOMContentLoaded', () => {
     els.masterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ isMasterEnabled: e.target.checked }, () => { showToast(e.target.checked ? '监听已开启' : '监听已暂停'); }); });
     els.playDefaultToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
-            // 🌟 原文：showToast(e.target.checked ? '未映射将播放默认音' : '未映射将静默推送');
             showToast(e.target.checked ? '已开启默认音频' : '已关闭默认音频');
+
+            // 🌟 联动子集 UI
+            const ttsSubSetting = document.getElementById('ttsSubSetting');
+            if (ttsSubSetting) {
+                ttsSubSetting.style.opacity = e.target.checked ? '1' : '0.4';
+                ttsSubSetting.style.pointerEvents = e.target.checked ? 'auto' : 'none';
+            }
         });
     });
     els.enableTTSToggle.addEventListener('change', (e) => {
