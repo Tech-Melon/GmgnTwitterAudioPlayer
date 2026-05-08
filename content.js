@@ -762,7 +762,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     
     const maker = item.m.toLowerCase();
     const tokenSymbol = item.bs || '代币';
-    const amountUSD = parseFloat(item.tu) || parseFloat(item.cu) || 0;
+    const amountUSD = parseFloat(item.cu) || parseFloat(item.au) || 0;
     const action = item.s;
 
     if (action !== 'buy' && action !== 'sell') return; // 只关心买卖动作
