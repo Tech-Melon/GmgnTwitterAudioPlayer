@@ -643,13 +643,58 @@
                     <button id="testWalletBuyBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSell" checked> 卖出(清仓/减仓)</label>
-                    <button id="testWalletSellBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSellReduce" checked> 卖出(减仓)</label>
+                    <button id="testWalletSellReduceBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSellClear" checked> 卖出(清仓)</label>
+                    <button id="testWalletSellClearBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
                 </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
-                <span style="font-size: 13px; color: var(--text-sec);">最小金额 ($):</span>
-                <input type="number" id="walletMinAmount" value="0" style="width: 80px; padding: 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main);">
+            <!-- 金额范围筛选 -->
+            <div style="margin-bottom: 10px;">
+                <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 4px;">金额</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="position: relative; flex: 1;">
+                        <input type="number" id="walletMinAmount" placeholder="不限" style="width: 100%; padding: 4px 20px 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                        <span style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-sec); pointer-events: none;">$</span>
+                    </div>
+                    <span style="font-size: 12px; color: var(--text-sec); font-weight: 500;">to</span>
+                    <div style="position: relative; flex: 1;">
+                        <input type="number" id="walletMaxAmount" placeholder="不限" style="width: 100%; padding: 4px 20px 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                        <span style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-sec); pointer-events: none;">$</span>
+                    </div>
+                </div>
+            </div>
+            <!-- 市值范围筛选 -->
+            <div style="margin-bottom: 10px;">
+                <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 4px;">市值</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="position: relative; flex: 1;">
+                        <input type="number" id="walletMinMcap" placeholder="不限" style="width: 100%; padding: 4px 24px 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                        <span style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-sec); pointer-events: none;">K</span>
+                    </div>
+                    <span style="font-size: 12px; color: var(--text-sec); font-weight: 500;">to</span>
+                    <div style="position: relative; flex: 1;">
+                        <input type="number" id="walletMaxMcap" placeholder="不限" style="width: 100%; padding: 4px 24px 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                        <span style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-sec); pointer-events: none;">K</span>
+                    </div>
+                </div>
+            </div>
+            <!-- 代币时间范围筛选 -->
+            <div style="margin-bottom: 12px;">
+                <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 4px;">代币时间</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="position: relative; flex: 1;">
+                        <input type="number" id="walletMinAge" placeholder="不限" style="width: 100%; padding: 4px 24px 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                        <span style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-sec); pointer-events: none;">m</span>
+                    </div>
+                    <span style="font-size: 12px; color: var(--text-sec); font-weight: 500;">to</span>
+                    <div style="position: relative; flex: 1;">
+                        <input type="number" id="walletMaxAge" placeholder="不限" style="width: 100%; padding: 4px 24px 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                        <span style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--text-sec); pointer-events: none;">m</span>
+                    </div>
+                </div>
             </div>
             <textarea id="walletDictInput" placeholder='请前往 GMGN 网页端，复制导出的带备注钱包 JSON 数据并粘贴至此处。' style="width: 100%; height: 80px; padding: 8px; border: 1px solid #d2d2d7; border-radius: 8px; background: transparent; color: var(--text-main); font-size: 12px; margin-bottom: 8px; box-sizing: border-box; resize: vertical;"></textarea>
             <div style="display: flex; gap: 10px;">
@@ -664,60 +709,92 @@
     <div id="tab-settings" class="tab-content">
         <div class="card">
             <h4>系统控制</h4>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span style="font-size: 14px; font-weight: 500;">总开关 (拦截所有通信)</span>
                 <label class="switch">
                     <input type="checkbox" id="masterToggle" checked>
                     <span class="slider"></span>
                 </label>
             </div>
-
-            <div class="volume-card" style="margin-bottom: 4px;">
-                <span>🔊 音量</span>
-                <input type="range" id="globalVolume" min="0" max="1.5" step="0.05" value="1">
-                <span id="volumePercent">100%</span>
-            </div>
-            <div style="font-size: 11px; color: #ff9500; margin-bottom: 12px; padding: 0 4px; line-height: 1.4;">
+            <div style="font-size: 11px; color: #ff9500; padding: 0 4px; line-height: 1.4;">
                 * 注意：实际播报音量受 GMGN 网页所在标签页系统音量影响，请确保未将网页静音。
             </div>
+        </div>
 
+        <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <span style="font-size: 13px; color: var(--text-main);">🐦 推特监控</span>
+                <span style="font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 4px;">🐦 推特监控</span>
                 <label class="switch" style="transform: scale(0.9);">
                     <input type="checkbox" id="enableTwitterToggle" checked>
                     <span class="slider"></span>
                 </label>
             </div>
-
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 13px; color: var(--text-main);">💰 钱包监控</span>
-                <label class="switch" style="transform: scale(0.9);">
-                    <input type="checkbox" id="enableWalletToggle" checked>
-                    <span class="slider"></span>
-                </label>
+            <div class="volume-card" style="margin-bottom: 12px; padding: 8px 12px;">
+                <span>🔊 音量</span>
+                <input type="range" id="twitterVolume" min="0" max="1.5" step="0.05" value="1">
+                <span id="twitterVolumePercent">100%</span>
             </div>
-        </div>
-
-        <div class="card">
-            <h4>🤖 AI 音色设置</h4>
-            <div id="ttsConfigPanel" style="margin-top: 8px;">
+            <div id="twitterTtsConfigPanel">
+                <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 6px;">🤖 AI 音色设置</span>
                 <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                    <select id="ttsVoiceSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                    <select id="twitterTtsVoiceSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
                         <option value="zh-CN-XiaoxiaoNeural">晓晓 (甜美女生)</option>
                         <option value="zh-CN-YunjianNeural">云健 (阳光男声)</option>
                         <option value="zh-CN-XiaoyiNeural">晓伊 (职业干练)</option>
                         <option value="en-US-AvaMultilingualNeural">Ava (多语种默认)</option>
                     </select>
-                    <button id="ttsTestBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                    <button id="twitterTtsTestBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
                 </div>
                 <div style="display: flex; gap: 8px;">
-                    <select id="ttsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
-                        <option value="-10%">语速: 稍慢</option>
+                    <select id="twitterTtsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
                         <option value="+0%">语速: 正常</option>
                         <option value="+15%">语速: 较快</option>
                         <option value="+30%">语速: 极速</option>
+                        <option value="+50%">语速: 起飞</option>
+                        <option value="+75%">语速: 闪电</option>
                     </select>
-                    <select id="ttsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                    <select id="twitterTtsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                        <option value="-5%">音调: 偏低</option>
+                        <option value="+0%">音调: 正常</option>
+                        <option value="+5%">音调: 偏高</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 4px;">💰 钱包监控</span>
+                <label class="switch" style="transform: scale(0.9);">
+                    <input type="checkbox" id="enableWalletToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="volume-card" style="margin-bottom: 12px; padding: 8px 12px;">
+                <span>🔊 音量</span>
+                <input type="range" id="walletVolume" min="0" max="1.5" step="0.05" value="1">
+                <span id="walletVolumePercent">100%</span>
+            </div>
+            <div id="walletTtsConfigPanel">
+                <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 6px;">🤖 AI 音色设置</span>
+                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                    <select id="walletTtsVoiceSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                        <option value="zh-CN-XiaoxiaoNeural">晓晓 (甜美女生)</option>
+                        <option value="zh-CN-YunjianNeural">云健 (阳光男声)</option>
+                        <option value="zh-CN-XiaoyiNeural">晓伊 (职业干练)</option>
+                        <option value="en-US-AvaMultilingualNeural">Ava (多语种默认)</option>
+                    </select>
+                    <button id="walletTtsTestBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <select id="walletTtsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
+                        <option value="+0%">语速: 正常</option>
+                        <option value="+15%">语速: 较快</option>
+                        <option value="+30%">语速: 极速</option>
+                        <option value="+50%">语速: 起飞</option>
+                        <option value="+75%">语速: 闪电</option>
+                    </select>
+                    <select id="walletTtsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
                         <option value="-5%">音调: 偏低</option>
                         <option value="+0%">音调: 正常</option>
                         <option value="+5%">音调: 偏高</option>

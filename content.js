@@ -29,15 +29,16 @@ const _unlockAutoplay = () => {
         configCache.enableTwitter = result.enableTwitter !== false;
         configCache.enableWallet = result.enableWallet !== false;
         configCache.globalVolume = result.globalVolume !== undefined ? result.globalVolume : 1.0;
+        configCache.twitterVolume = result.twitterVolume !== undefined ? result.twitterVolume : (configCache.globalVolume || 1.0);
+        configCache.walletVolume = result.walletVolume !== undefined ? result.walletVolume : (configCache.globalVolume || 1.0);
         configCache.mappings = result.twitterAudioMappings || {};
         configCache.customAudios = result.customAudios || {};
         configCache.eventFilters = result.eventFilters || { tweet: true, repost: true, reply: true, quote: true, other: true };
         configCache.playDefaultUnmapped = result.playDefaultUnmapped !== false;
         configCache.enableTTS = result.enableTTS !== false;
-        configCache.ttsVoice = result.ttsVoice || 'zh-CN-XiaoxiaoNeural';
-        configCache.ttsRate = result.ttsRate || '+0%';
-        configCache.ttsPitch = result.ttsPitch || '+0%';
-        configCache.walletFilters = result.walletFilters || { buy: true, sell: true, minAmount: 0 };
+        configCache.twitterTts = result.twitterTts || { voice: 'zh-CN-XiaoxiaoNeural', rate: '+0%', pitch: '+0%' };
+        configCache.walletTts = result.walletTts || { voice: 'zh-CN-XiaoxiaoNeural', rate: '+0%', pitch: '+0%' };
+        configCache.walletFilters = result.walletFilters || { buy: true, sellReduce: true, sellClear: true, minAmount: 0 };
         configCache.walletDictionary = result.walletDictionary || {};
     });
 
@@ -255,7 +256,7 @@ document.addEventListener('visibilitychange', () => {
 
         // 重新加载配置并预热音频
         try {
-            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'walletFilters', 'walletDictionary'], async (result) => {
+            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => {
                 if (chrome.runtime.lastError) return;
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
             if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
@@ -263,12 +264,13 @@ document.addEventListener('visibilitychange', () => {
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet;
             if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
+            if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
+            if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
             if (result.eventFilters) configCache.eventFilters = result.eventFilters;
             if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
             if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
-            if (result.ttsVoice) configCache.ttsVoice = result.ttsVoice;
-            if (result.ttsRate) configCache.ttsRate = result.ttsRate;
-            if (result.ttsPitch) configCache.ttsPitch = result.ttsPitch;
+            if (result.twitterTts) configCache.twitterTts = result.twitterTts;
+            if (result.walletTts) configCache.walletTts = result.walletTts;
             if (result.walletFilters) configCache.walletFilters = result.walletFilters;
             if (result.walletDictionary) configCache.walletDictionary = result.walletDictionary;
 
@@ -329,13 +331,15 @@ function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'walletFilters', 'walletDictionary'], async (result) => { // 🌟 数组加了高级定制选项
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => { // 🌟 数组加了高级定制选项
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet;
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
+    if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
+    if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
 
     if (result.eventFilters) configCache.eventFilters = result.eventFilters;
     if (configCache.eventFilters.other === undefined) configCache.eventFilters.other = true;
@@ -343,9 +347,8 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     // 🌟 赋值缓存
     if (result.playDefaultUnmapped !== undefined) configCache.playDefaultUnmapped = result.playDefaultUnmapped;
     if (result.enableTTS !== undefined) configCache.enableTTS = result.enableTTS;
-    if (result.ttsVoice) configCache.ttsVoice = result.ttsVoice;
-    if (result.ttsRate) configCache.ttsRate = result.ttsRate;
-    if (result.ttsPitch) configCache.ttsPitch = result.ttsPitch;
+    if (result.twitterTts) configCache.twitterTts = result.twitterTts;
+    if (result.walletTts) configCache.walletTts = result.walletTts;
     if (result.walletFilters) configCache.walletFilters = result.walletFilters;
     if (result.walletDictionary) configCache.walletDictionary = result.walletDictionary;
 
@@ -385,6 +388,8 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             needsPreload = true;
         }
         if (changes.globalVolume) configCache.globalVolume = changes.globalVolume.newValue;
+        if (changes.twitterVolume) configCache.twitterVolume = changes.twitterVolume.newValue;
+        if (changes.walletVolume) configCache.walletVolume = changes.walletVolume.newValue;
         if (changes.eventFilters) configCache.eventFilters = changes.eventFilters.newValue;
         if (changes.isMasterEnabled) {
             configCache.isMasterEnabled = changes.isMasterEnabled.newValue;
@@ -399,9 +404,8 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.enableTTS) {
             configCache.enableTTS = changes.enableTTS.newValue;
         }
-        if (changes.ttsVoice) configCache.ttsVoice = changes.ttsVoice.newValue;
-        if (changes.ttsRate) configCache.ttsRate = changes.ttsRate.newValue;
-        if (changes.ttsPitch) configCache.ttsPitch = changes.ttsPitch.newValue;
+        if (changes.twitterTts) configCache.twitterTts = changes.twitterTts.newValue;
+        if (changes.walletTts) configCache.walletTts = changes.walletTts.newValue;
         if (changes.walletFilters) configCache.walletFilters = changes.walletFilters.newValue;
         if (changes.walletDictionary) configCache.walletDictionary = changes.walletDictionary.newValue;
         if (changes.customAudios) {
@@ -429,15 +433,27 @@ let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
 // 🎤 云端 TTS 极速播放引擎 (双层缓存架构)
-async function playNetworkTTS(textItems) {
+async function playNetworkTTS(textItems, source = 'twitter') {
     const items = Array.isArray(textItems) ? textItems : [textItems];
     if (items.length === 0 || !items[0]) return;
     const text = items[0];
-    console.log("🔊 [GMGN 盯盘伴侣 - TTS] 播报:", items.join(' → '));
+    console.log(`🔊 [GMGN 盯盘伴侣 - TTS (${source})] 播报:`, items.join(' → '));
+
+    // 获取对应的 TTS 配置
+    const ttsConfig = source === 'wallet' ? (configCache.walletTts || {}) : (configCache.twitterTts || {});
+    const voice = ttsConfig.voice || 'zh-CN-XiaoxiaoNeural';
+    const rate = ttsConfig.rate || '+0%';
+    const pitch = ttsConfig.pitch || '+0%';
+
+    // 获取对应音量
+    const defaultVol = configCache.globalVolume !== undefined ? configCache.globalVolume : 1;
+    const targetVolume = source === 'wallet' 
+        ? (configCache.walletVolume !== undefined ? configCache.walletVolume : defaultVol)
+        : (configCache.twitterVolume !== undefined ? configCache.twitterVolume : defaultVol);
 
     try {
         const fetchAudioBlob = async (textChunk) => {
-            const cacheKey = `${textChunk}_${configCache.ttsVoice}_${configCache.ttsRate}_${configCache.ttsPitch}`;
+            const cacheKey = `${textChunk}_${voice}_${rate}_${pitch}`;
             let blob = await idb.get(cacheKey);
             if (!blob) {
                 // 🛡️ 超时保护：防止 CF Worker 冷启动或网络波动时 fetch 永久 hang 住
@@ -448,7 +464,7 @@ async function playNetworkTTS(textItems) {
                     const res = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: textChunk, voice: configCache.ttsVoice, rate: configCache.ttsRate, pitch: configCache.ttsPitch }),
+                        body: JSON.stringify({ text: textChunk, voice: voice, rate: rate, pitch: pitch }),
                         signal: controller.signal
                     });
                     clearTimeout(timeoutId);
@@ -467,7 +483,7 @@ async function playNetworkTTS(textItems) {
         const firstUrl = URL.createObjectURL(blob1);
         const firstAudio = new Audio(firstUrl);
         firstAudio.crossOrigin = "anonymous";
-        applyGainToAudio(firstAudio, configCache.globalVolume * 1.5);
+        applyGainToAudio(firstAudio, targetVolume * 1.5);
         firstAudio.play().catch(e => { 
             console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败，降级到默认提示音:", e.name);
             URL.revokeObjectURL(firstUrl);
@@ -488,7 +504,7 @@ async function playNetworkTTS(textItems) {
                 const nextUrl = URL.createObjectURL(nextBlob);
                 const nextAudio = new Audio(nextUrl);
                 nextAudio.crossOrigin = "anonymous";
-                applyGainToAudio(nextAudio, configCache.globalVolume * 1.5);
+                applyGainToAudio(nextAudio, targetVolume * 1.5);
                 nextAudio.onended = () => { 
                     URL.revokeObjectURL(nextUrl); 
                     if (nextAudio.__sourceNode) {
@@ -525,37 +541,49 @@ async function playNetworkTTS(textItems) {
     } catch (error) {
         console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] CF TTS 失败，降级到默认提示音:", error.message || error);
         if (typeof playConcurrentAudio === 'function') {
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), source);
         }
     }
 }
 
-function playBlobAudio(blob) {
-    const url = URL.createObjectURL(blob);
-    const player = new Audio(url);
-    player.crossOrigin = "anonymous";
-    // TTS 语音稍微放大一点，防止被提示音完全盖住
-    applyGainToAudio(player, configCache.globalVolume * 1.5);
+// 修改 playConcurrentAudio 传入 source 参数以适配新音量
+function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null) {
+    if (!src) return;
+    const defaultVol = configCache.globalVolume !== undefined ? configCache.globalVolume : 1;
+    const targetVolume = source === 'wallet' 
+        ? (configCache.walletVolume !== undefined ? configCache.walletVolume : defaultVol)
+        : (configCache.twitterVolume !== undefined ? configCache.twitterVolume : defaultVol);
 
-    player.addEventListener('ended', () => {
-        URL.revokeObjectURL(url); // 阅后即焚，释放内存
-        player.removeAttribute('src');
-        player.load();
-        if (player.__sourceNode) {
-            try { player.__sourceNode.disconnect(); } catch(e){}
-            try { player.__gainNode.disconnect(); } catch(e){}
+    const audio = new Audio(src);
+    audio.crossOrigin = "anonymous";
+    // 默认音效和定制音效走统一的增益逻辑
+    applyGainToAudio(audio, targetVolume);
+
+    // 🌟 播放结束后释放资源，防止 GainNode / MediaElementSource 内存泄漏
+    audio.addEventListener('ended', () => {
+        audio.removeAttribute('src');
+        audio.load();
+        if (audio.__sourceNode) {
+            try { audio.__sourceNode.disconnect(); } catch(e){}
+            try { audio.__gainNode.disconnect(); } catch(e){}
         }
     });
 
-    player.play().catch(e => {
-        console.error("❌ [GMGN 盯盘伴侣 - TTS] Blob音频播放失败，启用默认铃声兜底", e);
-        // 🚀 核心逻辑修改：如果连下载好的音频都无法播放，只能使用默认铃声兜底了
-        if (typeof playConcurrentAudio === 'function') {
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+    audio.addEventListener('error', (e) => {
+        console.warn("⚠️ [GMGN 盯盘伴侣] 主音频源异常，尝试纯 TTS 降级:", e);
+        if (ttsFallbackText) {
+            playNetworkTTS(ttsFallbackText, source);
+        }
+    });
+
+    // 🔊 执行播放（缺失此调用会导致铃声全部静默）
+    audio.play().catch(e => {
+        console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", e);
+        if (ttsFallbackText) {
+            playNetworkTTS(ttsFallbackText, source);
         }
     });
 }
-
 
 function processTwitterMessage(e) {
     // 平滑清理：当容量超过 1000 时，只清理最老的 100 条，而不是全部清空
@@ -713,7 +741,8 @@ function processTwitterMessage(e) {
         }
 
         // 统一设置音量，使用 GainNode 支持 200% 超级音量
-        applyGainToAudio(player, configCache.globalVolume);
+        const targetVolume = configCache.twitterVolume !== undefined ? configCache.twitterVolume : (configCache.globalVolume !== undefined ? configCache.globalVolume : 1);
+        applyGainToAudio(player, targetVolume);
 
         // 🌟 核心修复 2：用完即焚！监听播放结束事件，彻底释放克隆节点
         const cleanup = () => {
@@ -735,7 +764,7 @@ function processTwitterMessage(e) {
 
         // 🚀 彻底打破串行！并发执行 TTS，毫不等待提示音结束
         if (ttsText) {
-            playNetworkTTS(ttsText);
+            playNetworkTTS(ttsText, 'twitter');
         }
         player.addEventListener('ended', cleanup);
 
@@ -757,18 +786,18 @@ function processTwitterMessage(e) {
         if (vipAudioSrc) {
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
-            playConcurrentAudio(vipAudioSrc, ttsInfo); // 🎤 传入 TTS 文本
+            playConcurrentAudio(vipAudioSrc, 'twitter', ttsInfo); // 🎤 传入 TTS 文本
         } else if (ttsInfo) {
             // 🚀 新增分支：只有纯 TTS，没有任何前置铃声
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
-            playNetworkTTS(ttsInfo);
+            playNetworkTTS(ttsInfo, 'twitter');
         } else if (vipFallbackDefault) {
             // 降级情况：文件丢失被迫使用默认音 (不受新开关影响，照常播放)
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             console.log("🎵 [GMGN 盯盘伴侣] 降级播放默认音频");
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), 'twitter');
         } else if (nobodyWantsDefault && !isVipPresent) {
             // 🌟 新增判断：只有当允许播放未映射音频，且距离上次播放大于2秒时，才播放
             if (configCache.playDefaultUnmapped && (now - globalLastPlayTime > 2000)) {
@@ -787,10 +816,10 @@ function processTwitterMessage(e) {
 
                 // 🚀 核心逻辑修改：如果启用了 TTS 并成功生成了播报文本，则【只播放 TTS 人声】，彻底抛弃 default.MP3
                 if (unmappedTTS) {
-                    playNetworkTTS(unmappedTTS);
+                    playNetworkTTS(unmappedTTS, 'twitter');
                 } else {
                     // 如果关闭了 TTS 开关，则降级为只播放默认的“推特新消息” MP3
-                    playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+                    playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), 'twitter');
                 }
             }
         }
@@ -853,37 +882,108 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     const tokenSymbol = item.bs || '代币';
     const amountUSD = parseFloat(item.cu) || parseFloat(item.au) || 0;
     const action = item.s;
+    const cnt = item.cnt; // 'processed' 或 'confirm'
 
     if (action !== 'buy' && action !== 'sell') return; // 只关心买卖动作
 
     if (configCache.walletFilters && amountUSD < configCache.walletFilters.minAmount) return;
+    if (configCache.walletFilters && configCache.walletFilters.maxAmount > 0 && amountUSD > configCache.walletFilters.maxAmount) return;
     if (action === 'buy' && configCache.walletFilters && configCache.walletFilters.buy === false) return;
-    if (action === 'sell' && configCache.walletFilters && configCache.walletFilters.sell === false) return;
+    // 卖出的减仓/清仓过滤延迟到 confirm 阶段（processed 时还没有 ooc 信息）
+    // 但如果减仓和清仓都关闭了，直接跳过
+    if (action === 'sell' && configCache.walletFilters && configCache.walletFilters.sellReduce === false && configCache.walletFilters.sellClear === false) return;
+
+    // 🌟 市值范围过滤：市值 = 单价(pu) × 总供应量(bts)，单位 K(千美元)
+    if (configCache.walletFilters) {
+        const marketCapK = (parseFloat(item.pu) || 0) * (parseFloat(item.bts) || 0) / 1000;
+        if (configCache.walletFilters.minMcap > 0 && marketCapK < configCache.walletFilters.minMcap) return;
+        if (configCache.walletFilters.maxMcap > 0 && marketCapK > configCache.walletFilters.maxMcap) return;
+    }
+
+    // 🌟 代币时间范围过滤：代币年龄 = (交易时间ts - 创建时间bct) / 60，单位分钟
+    if (configCache.walletFilters && item.bct) {
+        const tokenAgeMin = (item.ts - item.bct) / 60;
+        if (configCache.walletFilters.minAge > 0 && tokenAgeMin < configCache.walletFilters.minAge) return;
+        if (configCache.walletFilters.maxAge > 0 && tokenAgeMin > configCache.walletFilters.maxAge) return;
+    }
 
     if (!configCache.walletDictionary) return;
     const walletInfo = configCache.walletDictionary[maker];
-    if (!walletInfo || !walletInfo.rename || walletInfo.rename.trim() === "") return; // 没有备注的则不播报
+    if (!walletInfo || !walletInfo.rename || walletInfo.rename.trim() === "") return;
     
     let rename = walletInfo.rename.trim();
-
-    // 根据交易哈希(h)进行精准去重，防止 processed 和 confirm 阶段重复播报
     const txHash = item.h;
-    if (txHash) {
-        if (walletLastPlayed.has(txHash)) return;
-        walletLastPlayed.set(txHash, true);
-        // 定期清理防爆内存（Map 保证插入顺序，FIFO 淘汰最老的一半）
-        if (walletLastPlayed.size > 2000) {
-            const iter = walletLastPlayed.keys();
-            for (let i = 0; i < 1000; i++) walletLastPlayed.delete(iter.next().value);
+
+    if (action === 'buy') {
+        // ✅ 买入：processed 阶段直接播报完整内容，confirm 通过 txHash 去重跳过
+        if (txHash) {
+            if (walletLastPlayed.has(txHash)) return;
+            walletLastPlayed.set(txHash, true);
+        } else {
+            const dbKey = `${maker}_buy_${tokenSymbol}`;
+            const now = Date.now();
+            if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
+            walletLastPlayed.set(dbKey, now);
         }
+        playNetworkTTS([`${rename}买入`, tokenSymbol], 'wallet');
     } else {
-        const dbKey = `${maker}_${action}_${tokenSymbol}`;
-        const now = Date.now();
-        if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
-        walletLastPlayed.set(dbKey, now);
+        // 🌟 卖出：两阶段流式播报架构
+        // 第一阶段 (processed)：立刻播报备注名，不等待 ooc 判定，抢占先机
+        // 第二阶段 (confirm)：获取 ooc 后判断减仓/清仓，根据用户开关决定是否补播
+        if (txHash) {
+            const state = walletLastPlayed.get(txHash);
+            if (state === true) return; // 该交易已完成全部播报
+
+            if (cnt === 'processed') {
+                if (state) return; // 已处理过 processed 阶段
+                walletLastPlayed.set(txHash, 'pending_sell');
+                playNetworkTTS([rename], 'wallet'); // 🎤 第一阶段：先播备注名
+            } else if (cnt === 'confirm') {
+                const isClearAll = item.ooc === 1;
+                const actionText = isClearAll ? '清仓' : '减仓';
+
+                // 🌟 根据用户开关过滤：清仓关闭则不播清仓，减仓关闭则不播减仓
+                if (configCache.walletFilters) {
+                    if (isClearAll && configCache.walletFilters.sellClear === false) {
+                        walletLastPlayed.set(txHash, true); // 标记已完成，避免重复
+                        return;
+                    }
+                    if (!isClearAll && configCache.walletFilters.sellReduce === false) {
+                        walletLastPlayed.set(txHash, true);
+                        return;
+                    }
+                }
+
+                if (state === 'pending_sell') {
+                    // 🎤 第二阶段：补播 "减仓/清仓+代币名" 合并为一条 TTS 请求
+                    walletLastPlayed.set(txHash, true);
+                    playNetworkTTS([`${actionText}${tokenSymbol}`], 'wallet');
+                } else {
+                    // 降级兜底：没收到 processed，直接播完整内容
+                    walletLastPlayed.set(txHash, true);
+                    playNetworkTTS([`${rename}${actionText}${tokenSymbol}`], 'wallet');
+                }
+            }
+        } else {
+            // 无 txHash 的降级去重逻辑
+            const dbKey = `${maker}_sell_${tokenSymbol}`;
+            const now = Date.now();
+            if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
+            walletLastPlayed.set(dbKey, now);
+            const isClearAll = item.ooc === 1;
+            const actionText = isClearAll ? '清仓' : '减仓';
+            // 无 txHash 时直接根据开关过滤
+            if (configCache.walletFilters) {
+                if (isClearAll && configCache.walletFilters.sellClear === false) return;
+                if (!isClearAll && configCache.walletFilters.sellReduce === false) return;
+            }
+            playNetworkTTS([`${rename}${actionText}`, tokenSymbol], 'wallet');
+        }
     }
 
-    let actionText = action === 'buy' ? '买入' : '卖出';
-
-    playNetworkTTS([`${rename}${actionText}`, tokenSymbol]);
+    // 定期清理防爆内存（Map 保证插入顺序，FIFO 淘汰最老的一半）
+    if (walletLastPlayed.size > 2000) {
+        const iter = walletLastPlayed.keys();
+        for (let i = 0; i < 1000; i++) walletLastPlayed.delete(iter.next().value);
+    }
 });

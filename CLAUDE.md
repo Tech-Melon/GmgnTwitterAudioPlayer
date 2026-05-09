@@ -6,6 +6,11 @@ This file provides guidance to Claude Code when working with the `GmgnTwitterAud
 
 这是一个 Chrome 浏览器扩展项目，旨在为特定的社交媒体信息流提供自定义的音频播报和监控功能。项目可能同时包含前端（Chrome Extension API、JS/TS、HTML）与后端的辅助脚本。
 
+## 🚨 核心绝对禁令 (CRITICAL RULES)
+
+- **根目录纯洁性**：**绝对禁止**将任何带有 `_run_` 前缀的临时脚本（如 `_run_*.py` 等用于绕过 UAC 或执行命令的脚本）创建在项目根目录！
+- **临时脚本隔离**：所有临时脚本**必须且只能**创建在 `tmp/` 目录下（例如 `tmp/_run_execute_pack.py`），并在执行完毕后由系统或主动清理，以保持根目录和 Git 树的整洁。
+
 ## 🛠️ Python 编码与环境规范 (针对所有 .py 文件)
 
 当需要编写、修改或重构 Python 辅助脚本时，必须严格遵守以下规范：
@@ -20,6 +25,13 @@ This file provides guidance to Claude Code when working with the `GmgnTwitterAud
 - 优先使用 Chrome Manifest V3 标准。
 - 确保 Service Worker (Background scripts) 的逻辑非持久化且能正确被唤醒。
 - 在处理 DOM 和 Content Scripts 时，注意 Twitter 页面的动态渲染特性，优先使用 MutationObserver 而不是简单的定时器。
+
+## 📦 打包与发布规范
+
+当需要打包此 Chrome 扩展时，请遵循以下流程：
+- **版本号维护**：如需升级版本，只需修改根目录 `manifest.json` 中的 `version` 字段。
+- **一键打包脚本**：必须运行 `scripts/pack.py` 脚本执行打包（`python scripts/pack.py`）。该脚本会自动读取 `manifest.json` 中的版本号，自动删除目录下的旧版压缩包（`GmgnTwitterAudioPlayer-v*.zip`），并生成包含核心文件和资源目录的新版本 ZIP 文件。
+- **免维护原则**：打包脚本已经通用化，打包时直接运行该脚本即可。
 
 ## 常用命令 (请根据实际情况调整)
 

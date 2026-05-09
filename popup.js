@@ -57,12 +57,18 @@ document.addEventListener('DOMContentLoaded', () => {
         enableWalletToggle: document.getElementById('enableWalletToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
         enableTTSToggle: document.getElementById('enableTTSToggle'), // 🌟 新增的 TTS 开关
-        ttsVoiceSelect: document.getElementById('ttsVoiceSelect'),
-        ttsRateSelect: document.getElementById('ttsRateSelect'),
-        ttsPitchSelect: document.getElementById('ttsPitchSelect'),
-        ttsTestBtn: document.getElementById('ttsTestBtn'),
-        globalVolume: document.getElementById('globalVolume'),
-        volumePercent: document.getElementById('volumePercent'),
+        twitterTtsVoiceSelect: document.getElementById('twitterTtsVoiceSelect'),
+        twitterTtsRateSelect: document.getElementById('twitterTtsRateSelect'),
+        twitterTtsPitchSelect: document.getElementById('twitterTtsPitchSelect'),
+        twitterTtsTestBtn: document.getElementById('twitterTtsTestBtn'),
+        twitterVolume: document.getElementById('twitterVolume'),
+        twitterVolumePercent: document.getElementById('twitterVolumePercent'),
+        walletTtsVoiceSelect: document.getElementById('walletTtsVoiceSelect'),
+        walletTtsRateSelect: document.getElementById('walletTtsRateSelect'),
+        walletTtsPitchSelect: document.getElementById('walletTtsPitchSelect'),
+        walletTtsTestBtn: document.getElementById('walletTtsTestBtn'),
+        walletVolume: document.getElementById('walletVolume'),
+        walletVolumePercent: document.getElementById('walletVolumePercent'),
         uploadBtn: document.getElementById('uploadBtn'),
         exportAudioZipBtn: document.getElementById('exportAudioZipBtn'),
         customAudioFile: document.getElementById('customAudioFile'),
@@ -91,10 +97,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Wallet Elements
         filterBuy: document.getElementById('filterBuy'),
-        filterSell: document.getElementById('filterSell'),
+        filterSellReduce: document.getElementById('filterSellReduce'),
+        filterSellClear: document.getElementById('filterSellClear'),
         testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
-        testWalletSellBtn: document.getElementById('testWalletSellBtn'),
+        testWalletSellReduceBtn: document.getElementById('testWalletSellReduceBtn'),
+        testWalletSellClearBtn: document.getElementById('testWalletSellClearBtn'),
         walletMinAmount: document.getElementById('walletMinAmount'),
+        walletMaxAmount: document.getElementById('walletMaxAmount'),
+        walletMinMcap: document.getElementById('walletMinMcap'),
+        walletMaxMcap: document.getElementById('walletMaxMcap'),
+        walletMinAge: document.getElementById('walletMinAge'),
+        walletMaxAge: document.getElementById('walletMaxAge'),
         walletDictInput: document.getElementById('walletDictInput'),
         importWalletDictBtn: document.getElementById('importWalletDictBtn'),
         clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
@@ -167,7 +180,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function loadData() {
-        chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'globalVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'walletFilters', 'walletDictionary'], (result) => {
+        chrome.storage.local.get([
+            'twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 
+            'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 
+            'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 
+            'walletFilters', 'walletDictionary'
+        ], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
 
@@ -180,26 +198,48 @@ document.addEventListener('DOMContentLoaded', () => {
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
 
-            if (result.ttsVoice) els.ttsVoiceSelect.value = result.ttsVoice;
-            if (result.ttsRate) {
-                let r = String(result.ttsRate);
-                let migrated = false;
-                if (r === '1.0' || r === '1') { r = '+0%'; migrated = true; }
-                else if (r === '0.9') { r = '-10%'; migrated = true; }
-                else if (r === '1.15') { r = '+15%'; migrated = true; }
-                else if (r === '1.3') { r = '+30%'; migrated = true; }
-                els.ttsRateSelect.value = r;
-                if (migrated) chrome.storage.local.set({ ttsRate: r });
-            }
-            if (result.ttsPitch) {
-                let p = String(result.ttsPitch);
-                let migrated = false;
-                if (p === '0Hz' || p === '0') { p = '+0%'; migrated = true; }
-                else if (p === '-20Hz') { p = '-5%'; migrated = true; }
-                else if (p === '+20Hz') { p = '+5%'; migrated = true; }
-                els.ttsPitchSelect.value = p;
-                if (migrated) chrome.storage.local.set({ ttsPitch: p });
-            }
+            // 🌟 迁移和初始化音量设置
+            const defaultVol = result.globalVolume !== undefined ? result.globalVolume : 1;
+            const tVol = result.twitterVolume !== undefined ? result.twitterVolume : defaultVol;
+            const wVol = result.walletVolume !== undefined ? result.walletVolume : defaultVol;
+            
+            els.twitterVolume.value = tVol;
+            els.twitterVolumePercent.textContent = Math.round(tVol * 100) + '%';
+            els.walletVolume.value = wVol;
+            els.walletVolumePercent.textContent = Math.round(wVol * 100) + '%';
+
+            // 🌟 迁移和初始化 TTS 设置
+            const oldTts = {
+                voice: result.ttsVoice || 'zh-CN-XiaoxiaoNeural',
+                rate: result.ttsRate || '+0%',
+                pitch: result.ttsPitch || '+0%'
+            };
+
+            const twitterTts = result.twitterTts || oldTts;
+            const walletTts = result.walletTts || oldTts;
+
+            // 适配旧版语速
+            const normalizeRate = (r) => {
+                if (r === '1.0' || r === '1') return '+0%';
+                if (r === '0.9' || r === '-10%') return '+0%'; // "稍慢"选项已废弃，统一降级为正常
+                if (r === '1.15') return '+15%';
+                if (r === '1.3') return '+30%';
+                return r;
+            };
+            const normalizePitch = (p) => {
+                if (p === '0Hz' || p === '0') return '+0%';
+                if (p === '-20Hz') return '-5%';
+                if (p === '+20Hz') return '+5%';
+                return p;
+            };
+
+            els.twitterTtsVoiceSelect.value = twitterTts.voice;
+            els.twitterTtsRateSelect.value = normalizeRate(twitterTts.rate);
+            els.twitterTtsPitchSelect.value = normalizePitch(twitterTts.pitch);
+
+            els.walletTtsVoiceSelect.value = walletTts.voice;
+            els.walletTtsRateSelect.value = normalizeRate(walletTts.rate);
+            els.walletTtsPitchSelect.value = normalizePitch(walletTts.pitch);
 
             // 🌟 联动子集 UI：如果总开关关闭，则把子开关置灰并禁用
             const ttsSubSetting = document.getElementById('ttsSubSetting');
@@ -213,15 +253,16 @@ document.addEventListener('DOMContentLoaded', () => {
             els.filterQuote.checked = filters.quote !== false;
             els.filterOther.checked = filters.other !== false; // 🌟 新增
 
-            if (result.globalVolume !== undefined) {
-                els.globalVolume.value = result.globalVolume;
-                els.volumePercent.textContent = Math.round(result.globalVolume * 100) + '%';
-            }
-
-            const walletFilters = result.walletFilters || { buy: true, sell: true, minAmount: 0 };
+            const walletFilters = result.walletFilters || { buy: true, sellReduce: true, sellClear: true, minAmount: 0 };
             els.filterBuy.checked = walletFilters.buy !== false;
-            els.filterSell.checked = walletFilters.sell !== false;
-            els.walletMinAmount.value = walletFilters.minAmount || 0;
+            els.filterSellReduce.checked = walletFilters.sellReduce !== false;
+            els.filterSellClear.checked = walletFilters.sellClear !== false;
+            els.walletMinAmount.value = walletFilters.minAmount || '';
+            els.walletMaxAmount.value = walletFilters.maxAmount || '';
+            els.walletMinMcap.value = walletFilters.minMcap || '';
+            els.walletMaxMcap.value = walletFilters.maxMcap || '';
+            els.walletMinAge.value = walletFilters.minAge || '';
+            els.walletMaxAge.value = walletFilters.maxAge || '';
 
             const walletDictionary = result.walletDictionary || {};
             els.walletDictStatus.textContent = `已导入: ${Object.keys(walletDictionary).length} 个地址`;
@@ -261,7 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 div.querySelector('.play').addEventListener('click', () => {
                     const audioSrc = typeof customAudios[customId] === 'string' ? customAudios[customId] : customAudios[customId].data;
                     const audio = new Audio(audioSrc);
-                    applyGainToAudio(audio, parseFloat(els.globalVolume.value));
+                    applyGainToAudio(audio, parseFloat(els.twitterVolume.value));
                     audio.play().catch(e => showToast('播放失败'));
                 });
 
@@ -377,16 +418,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({
                                         text: ttsText,
-                                        voice: els.ttsVoiceSelect.value,
-                                        rate: els.ttsRateSelect.value,
-                                        pitch: els.ttsPitchSelect.value
+                                        voice: els.twitterTtsVoiceSelect.value,
+                                        rate: els.twitterTtsRateSelect.value,
+                                        pitch: els.twitterTtsPitchSelect.value
                                     })
                                 });
                                 if (!res.ok) throw new Error("TTS Request Failed");
                                 const blob = await res.blob();
                                 const audioUrl = URL.createObjectURL(blob);
                                 const audio = new Audio(audioUrl);
-                                applyGainToAudio(audio, parseFloat(els.globalVolume.value) * 1.5);
+                                applyGainToAudio(audio, parseFloat(els.twitterVolume.value) * 1.5);
                                 audio.addEventListener('ended', () => {
                                     URL.revokeObjectURL(audioUrl);
                                     audio.removeAttribute('src');
@@ -404,7 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         if (audioSrc) {
                             const audio = new Audio(audioSrc);
-                            applyGainToAudio(audio, parseFloat(els.globalVolume.value));
+                            applyGainToAudio(audio, parseFloat(els.twitterVolume.value));
 
                             if (needsTTS) {
                                 audio.addEventListener('ended', playEdgeTTS);
@@ -463,28 +504,52 @@ document.addEventListener('DOMContentLoaded', () => {
     els.filterQuote.addEventListener('change', saveFilters);
     els.filterOther.addEventListener('change', saveFilters); // 🌟 新增
 
-    const saveTTSConfig = () => {
+    const saveTwitterConfig = () => {
         chrome.storage.local.set({
-            ttsVoice: els.ttsVoiceSelect.value,
-            ttsRate: els.ttsRateSelect.value,
-            ttsPitch: els.ttsPitchSelect.value
+            twitterTts: {
+                voice: els.twitterTtsVoiceSelect.value,
+                rate: els.twitterTtsRateSelect.value,
+                pitch: els.twitterTtsPitchSelect.value
+            },
+            twitterVolume: parseFloat(els.twitterVolume.value)
         });
+        els.twitterVolumePercent.textContent = Math.round(parseFloat(els.twitterVolume.value) * 100) + '%';
     };
-    els.ttsVoiceSelect.addEventListener('change', saveTTSConfig);
-    els.ttsRateSelect.addEventListener('change', saveTTSConfig);
-    els.ttsPitchSelect.addEventListener('change', saveTTSConfig);
+
+    const saveWalletConfig = () => {
+        chrome.storage.local.set({
+            walletTts: {
+                voice: els.walletTtsVoiceSelect.value,
+                rate: els.walletTtsRateSelect.value,
+                pitch: els.walletTtsPitchSelect.value
+            },
+            walletVolume: parseFloat(els.walletVolume.value)
+        });
+        els.walletVolumePercent.textContent = Math.round(parseFloat(els.walletVolume.value) * 100) + '%';
+    };
+
+    els.twitterTtsVoiceSelect.addEventListener('change', saveTwitterConfig);
+    els.twitterTtsRateSelect.addEventListener('change', saveTwitterConfig);
+    els.twitterTtsPitchSelect.addEventListener('change', saveTwitterConfig);
+    els.twitterVolume.addEventListener('input', saveTwitterConfig);
+    els.twitterVolume.addEventListener('change', saveTwitterConfig);
+
+    els.walletTtsVoiceSelect.addEventListener('change', saveWalletConfig);
+    els.walletTtsRateSelect.addEventListener('change', saveWalletConfig);
+    els.walletTtsPitchSelect.addEventListener('change', saveWalletConfig);
+    els.walletVolume.addEventListener('input', saveWalletConfig);
+    els.walletVolume.addEventListener('change', saveWalletConfig);
 
 
     // 🌟 钱包专属试听逻辑
     const playWalletTTS = async (text) => {
-        const voice = els.ttsVoiceSelect.value;
-        const rate = els.ttsRateSelect.value;
-        const pitch = els.ttsPitchSelect.value;
+        const voice = els.walletTtsVoiceSelect.value;
+        const rate = els.walletTtsRateSelect.value;
+        const pitch = els.walletTtsPitchSelect.value;
         els.toast.textContent = "生成语音中...";
         els.toast.classList.add('show');
         try {
-            const url = CF_TTS_API;
-            const res = await fetch(url, {
+            const res = await fetch(CF_TTS_API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text, voice, rate, pitch })
@@ -493,7 +558,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            applyGainToAudio(audio, parseFloat(els.globalVolume.value) * 1.5);
+            applyGainToAudio(audio, parseFloat(els.walletVolume.value) * 1.5);
             audio.play();
             els.toast.classList.remove('show');
         } catch (e) {
@@ -503,16 +568,17 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     els.testWalletBuyBtn.addEventListener('click', () => playWalletTTS("技术瓜买入比特币"));
-    els.testWalletSellBtn.addEventListener('click', () => playWalletTTS("技术瓜卖出比特币"));
+    els.testWalletSellReduceBtn.addEventListener('click', () => playWalletTTS("技术瓜减仓比特币"));
+    els.testWalletSellClearBtn.addEventListener('click', () => playWalletTTS("技术瓜清仓比特币"));
 
-    els.ttsTestBtn.addEventListener('click', async () => {
+    // 🌟 系统设置 - 推特监控试听
+    els.twitterTtsTestBtn.addEventListener('click', async () => {
         const text = "技术瓜发推啦";
-        const voice = els.ttsVoiceSelect.value;
-        const rate = els.ttsRateSelect.value;
-        const pitch = els.ttsPitchSelect.value;
+        const voice = els.twitterTtsVoiceSelect.value;
+        const rate = els.twitterTtsRateSelect.value;
+        const pitch = els.twitterTtsPitchSelect.value;
         try {
-            const url = CF_TTS_API;
-            const res = await fetch(url, {
+            const res = await fetch(CF_TTS_API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text, voice, rate, pitch })
@@ -521,7 +587,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            applyGainToAudio(audio, parseFloat(els.globalVolume.value) * 1.5);
+            applyGainToAudio(audio, parseFloat(els.twitterVolume.value) * 1.5);
             audio.addEventListener('ended', () => {
                 URL.revokeObjectURL(audioUrl);
                 audio.removeAttribute('src');
@@ -536,6 +602,9 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('网络 TTS 失败，请检查连接');
         }
     });
+
+    // 🌟 系统设置 - 钱包监控试听
+    els.walletTtsTestBtn.addEventListener('click', () => playWalletTTS("技术瓜买入比特币"));
 
     els.exportRulesBtn.addEventListener('click', () => {
         chrome.storage.local.get(['twitterAudioMappings'], (result) => {
@@ -592,8 +661,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    els.globalVolume.addEventListener('input', (e) => { els.volumePercent.textContent = Math.round(e.target.value * 100) + '%'; });
-    els.globalVolume.addEventListener('change', (e) => { chrome.storage.local.set({ globalVolume: parseFloat(e.target.value) }); });
+    // [已废弃] 全局音量控制已拆分为 twitterVolume / walletVolume 独立控制，事件已在 saveTwitterConfig / saveWalletConfig 中处理
     els.masterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ isMasterEnabled: e.target.checked }, () => { showToast(e.target.checked ? '监听已开启' : '监听已暂停'); }); });
     els.enableTwitterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableTwitter: e.target.checked }, () => { showToast(e.target.checked ? '推特监控已开启' : '推特监控已关闭'); }); });
     els.enableWalletToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableWallet: e.target.checked }, () => { showToast(e.target.checked ? '钱包监控已开启' : '钱包监控已关闭'); }); });
@@ -791,15 +859,27 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({
             walletFilters: {
                 buy: els.filterBuy.checked,
-                sell: els.filterSell.checked,
-                minAmount: parseFloat(els.walletMinAmount.value) || 0
+                sellReduce: els.filterSellReduce.checked,
+                sellClear: els.filterSellClear.checked,
+                minAmount: parseFloat(els.walletMinAmount.value) || 0,
+                maxAmount: parseFloat(els.walletMaxAmount.value) || 0,
+                minMcap: parseFloat(els.walletMinMcap.value) || 0,
+                maxMcap: parseFloat(els.walletMaxMcap.value) || 0,
+                minAge: parseFloat(els.walletMinAge.value) || 0,
+                maxAge: parseFloat(els.walletMaxAge.value) || 0
             }
         });
     };
 
     els.filterBuy.addEventListener('change', saveWalletFilters);
-    els.filterSell.addEventListener('change', saveWalletFilters);
+    els.filterSellReduce.addEventListener('change', saveWalletFilters);
+    els.filterSellClear.addEventListener('change', saveWalletFilters);
     els.walletMinAmount.addEventListener('change', saveWalletFilters);
+    els.walletMaxAmount.addEventListener('change', saveWalletFilters);
+    els.walletMinMcap.addEventListener('change', saveWalletFilters);
+    els.walletMaxMcap.addEventListener('change', saveWalletFilters);
+    els.walletMinAge.addEventListener('change', saveWalletFilters);
+    els.walletMaxAge.addEventListener('change', saveWalletFilters);
 
     els.importWalletDictBtn.addEventListener('click', () => {
         const text = els.walletDictInput.value.trim();
