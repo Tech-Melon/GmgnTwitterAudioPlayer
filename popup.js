@@ -7,6 +7,29 @@ document.addEventListener('DOMContentLoaded', () => {
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
     );
 
+    let sharedAudioCtx = null;
+    function applyGainToAudio(audio, volume) {
+        if (volume <= 1.0) {
+            audio.volume = Math.max(0, volume);
+            return;
+        }
+        audio.volume = 1.0;
+        try {
+            if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
+            if (!audio.__sourceNode) {
+                audio.__sourceNode = sharedAudioCtx.createMediaElementSource(audio);
+                const gainNode = sharedAudioCtx.createGain();
+                audio.__gainNode = gainNode;
+                audio.__sourceNode.connect(gainNode);
+                gainNode.connect(sharedAudioCtx.destination);
+            }
+            audio.__gainNode.gain.value = volume;
+        } catch (e) {
+            console.warn("[GMGN 盯盘伴侣] 超级音量失败:", e);
+        }
+    }
+
     // 🌟 Tab 切换逻辑（带状态持久化，重新打开插件时保留上次页面）
     const switchTab = (tabId) => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -238,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 div.querySelector('.play').addEventListener('click', () => {
                     const audioSrc = typeof customAudios[customId] === 'string' ? customAudios[customId] : customAudios[customId].data;
                     const audio = new Audio(audioSrc);
-                    audio.volume = parseFloat(els.globalVolume.value);
+                    applyGainToAudio(audio, parseFloat(els.globalVolume.value));
                     audio.play().catch(e => showToast('播放失败'));
                 });
 
@@ -363,11 +386,15 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const blob = await res.blob();
                                 const audioUrl = URL.createObjectURL(blob);
                                 const audio = new Audio(audioUrl);
-                                audio.volume = Math.min(parseFloat(els.globalVolume.value) * 1.5, 1.0);
+                                applyGainToAudio(audio, parseFloat(els.globalVolume.value) * 1.5);
                                 audio.addEventListener('ended', () => {
                                     URL.revokeObjectURL(audioUrl);
                                     audio.removeAttribute('src');
                                     audio.load();
+                                    if (audio.__sourceNode) {
+                                        try { audio.__sourceNode.disconnect(); } catch(e){}
+                                        try { audio.__gainNode.disconnect(); } catch(e){}
+                                    }
                                 });
                                 audio.play().catch(e => showToast('TTS 播放失败'));
                             } catch (e) {
@@ -377,7 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         if (audioSrc) {
                             const audio = new Audio(audioSrc);
-                            audio.volume = parseFloat(els.globalVolume.value);
+                            applyGainToAudio(audio, parseFloat(els.globalVolume.value));
 
                             if (needsTTS) {
                                 audio.addEventListener('ended', playEdgeTTS);
@@ -466,7 +493,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            audio.volume = Math.min(parseFloat(els.globalVolume.value), 1);
+            applyGainToAudio(audio, parseFloat(els.globalVolume.value) * 1.5);
             audio.play();
             els.toast.classList.remove('show');
         } catch (e) {
@@ -494,11 +521,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            audio.volume = Math.min(parseFloat(els.globalVolume.value) * 1.5, 1.0);
+            applyGainToAudio(audio, parseFloat(els.globalVolume.value) * 1.5);
             audio.addEventListener('ended', () => {
                 URL.revokeObjectURL(audioUrl);
                 audio.removeAttribute('src');
                 audio.load();
+                if (audio.__sourceNode) {
+                    try { audio.__sourceNode.disconnect(); } catch(e){}
+                    try { audio.__gainNode.disconnect(); } catch(e){}
+                }
             });
             audio.play().catch(e => showToast('TTS 播放失败'));
         } catch (e) {

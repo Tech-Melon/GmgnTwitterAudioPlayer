@@ -105,12 +105,66 @@ const idb = {
 let preloadedAudios = new Map();
 let isRebuildingBlob = false; // 🌟 新增：全局 Blob 重建锁
 
-function warmupAudio(src) {
+const extensionBlobs = {};
+
+async function getSafeAudioSrc(src) {
+    if (!src.startsWith('chrome-extension://')) return src;
+    if (extensionBlobs[src]) return extensionBlobs[src];
+    try {
+        const res = await fetch(src);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        extensionBlobs[src] = url;
+        return url;
+    } catch (e) {
+        console.error("[GMGN 盯盘伴侣] 预热时转换内部音频失败:", e);
+        return src;
+    }
+}
+
+let sharedAudioCtx = null;
+function applyGainToAudio(audio, volume) {
+    if (volume <= 1.0) {
+        audio.volume = Math.max(0, volume);
+        return;
+    }
+    audio.volume = 1.0; // 基础音量拉满
+
+    // 🔥 防御静音 Bug：在 Content Script 中，如果不带 crossOrigin 的原生链接经过 Web Audio API 会输出静默！
+    const isSafe = audio.crossOrigin === "anonymous" || 
+                  (audio.src && (audio.src.startsWith('blob:') || audio.src.startsWith('data:')));
+    
+    if (!isSafe) {
+        console.warn("[GMGN 盯盘伴侣] 跨域音频安全回退，为防静音，限制最高 100% 音量");
+        return;
+    }
+
+    try {
+        if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
+        
+        if (!audio.__sourceNode) {
+            audio.__sourceNode = sharedAudioCtx.createMediaElementSource(audio);
+            const gainNode = sharedAudioCtx.createGain();
+            audio.__gainNode = gainNode;
+            audio.__sourceNode.connect(gainNode);
+            gainNode.connect(sharedAudioCtx.destination);
+        }
+        audio.__gainNode.gain.value = volume;
+    } catch (e) {
+        console.warn("[GMGN 盯盘伴侣] 超级音量(Web Audio API)增益失败，降级为 100% 音量:", e);
+    }
+}
+
+async function warmupAudio(src) {
     if (!src) return;
     if (!preloadedAudios.has(src)) {
+        preloadedAudios.set(src, null); // 占位，防止并发重复获取
+        const safeSrc = await getSafeAudioSrc(src);
         const audio = new Audio();
+        audio.crossOrigin = "anonymous"; // 允许 Web Audio API 跨域处理
         audio.preload = 'auto'; // 强制浏览器在后台拉取并立刻解码音频
-        audio.src = src;
+        audio.src = safeSrc;
         audio.load();           // 将音频载入驻留内存
         preloadedAudios.set(src, audio);
     }
@@ -137,6 +191,7 @@ function checkAudioHealth(audio) {
 function initPreloadCache() {
     // 🌟 核心修复 1：彻底销毁旧的 Audio 实例，防止内存泄漏和解码器堆积
     preloadedAudios.forEach((audio) => {
+        if (!audio) return; // 跳过异步预热中的 null 占位符
         try {
             audio.pause();
             audio.removeAttribute('src');
@@ -411,7 +466,8 @@ async function playNetworkTTS(textItems) {
         const blob1 = await fetchAudioBlob(text);
         const firstUrl = URL.createObjectURL(blob1);
         const firstAudio = new Audio(firstUrl);
-        firstAudio.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
+        firstAudio.crossOrigin = "anonymous";
+        applyGainToAudio(firstAudio, configCache.globalVolume * 1.5);
         firstAudio.play().catch(e => { 
             console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败，降级到默认提示音:", e.name);
             URL.revokeObjectURL(firstUrl);
@@ -431,18 +487,39 @@ async function playNetworkTTS(textItems) {
                 if (!nextBlob) { return; }
                 const nextUrl = URL.createObjectURL(nextBlob);
                 const nextAudio = new Audio(nextUrl);
-                nextAudio.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
-                nextAudio.onended = () => { URL.revokeObjectURL(nextUrl); if (index + 1 < items.length) playNext(index + 1); };
+                nextAudio.crossOrigin = "anonymous";
+                applyGainToAudio(nextAudio, configCache.globalVolume * 1.5);
+                nextAudio.onended = () => { 
+                    URL.revokeObjectURL(nextUrl); 
+                    if (nextAudio.__sourceNode) {
+                        try { nextAudio.__sourceNode.disconnect(); } catch(e){}
+                        try { nextAudio.__gainNode.disconnect(); } catch(e){}
+                    }
+                    if (index + 1 < items.length) playNext(index + 1); 
+                };
                 nextAudio.onerror = () => { URL.revokeObjectURL(nextUrl); };
                 nextAudio.play().catch(e => {
                     console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob后续播放失败:", e.name, e.message);
                     URL.revokeObjectURL(nextUrl);
                 });
             };
-            firstAudio.onended = () => { URL.revokeObjectURL(firstUrl); playNext(1); };
+            firstAudio.onended = () => { 
+                URL.revokeObjectURL(firstUrl); 
+                if (firstAudio.__sourceNode) {
+                    try { firstAudio.__sourceNode.disconnect(); } catch(e){}
+                    try { firstAudio.__gainNode.disconnect(); } catch(e){}
+                }
+                playNext(1); 
+            };
             firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); playNext(1); };
         } else {
-            firstAudio.onended = () => { URL.revokeObjectURL(firstUrl); };
+            firstAudio.onended = () => { 
+                URL.revokeObjectURL(firstUrl); 
+                if (firstAudio.__sourceNode) {
+                    try { firstAudio.__sourceNode.disconnect(); } catch(e){}
+                    try { firstAudio.__gainNode.disconnect(); } catch(e){}
+                }
+            };
             firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); };
         }
     } catch (error) {
@@ -456,13 +533,18 @@ async function playNetworkTTS(textItems) {
 function playBlobAudio(blob) {
     const url = URL.createObjectURL(blob);
     const player = new Audio(url);
+    player.crossOrigin = "anonymous";
     // TTS 语音稍微放大一点，防止被提示音完全盖住
-    player.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
+    applyGainToAudio(player, configCache.globalVolume * 1.5);
 
     player.addEventListener('ended', () => {
         URL.revokeObjectURL(url); // 阅后即焚，释放内存
         player.removeAttribute('src');
         player.load();
+        if (player.__sourceNode) {
+            try { player.__sourceNode.disconnect(); } catch(e){}
+            try { player.__gainNode.disconnect(); } catch(e){}
+        }
     });
 
     player.play().catch(e => {
@@ -618,14 +700,20 @@ function processTwitterMessage(e) {
 
             // 🚨 核心修复：只有在 player 没有被兜底逻辑接管时，才创建新的 Audio
             if (!player) {
-                player = new Audio(src);
+                const safeSrc = extensionBlobs[src];
+                if (safeSrc) {
+                    player = new Audio(safeSrc);
+                    player.crossOrigin = "anonymous";
+                } else {
+                    player = new Audio(src); // 没有安全源时，不加 crossOrigin 防止请求直接被浏览器拦截
+                }
                 // 缓存未命中或失效时，尝试重新预热
                 warmupAudio(src);
             }
         }
 
-        // 统一设置音量，因为上面的分支都没有设置
-        player.volume = configCache.globalVolume;
+        // 统一设置音量，使用 GainNode 支持 200% 超级音量
+        applyGainToAudio(player, configCache.globalVolume);
 
         // 🌟 核心修复 2：用完即焚！监听播放结束事件，彻底释放克隆节点
         const cleanup = () => {
@@ -633,6 +721,13 @@ function processTwitterMessage(e) {
             player.pause();
             player.removeAttribute('src');
             player.load(); // 释放解码器
+            
+            // 🔥 核心防内存泄漏：断开 Web Audio API 节点图，防止 Destination 无限膨胀
+            if (player.__sourceNode) {
+                try { player.__sourceNode.disconnect(); } catch(e){}
+                try { player.__gainNode.disconnect(); } catch(e){}
+            }
+
             player.removeEventListener('ended', cleanup);
             player.removeEventListener('error', cleanup);
             player = null; // 切断 JS 引用，立刻交由 GC 回收
