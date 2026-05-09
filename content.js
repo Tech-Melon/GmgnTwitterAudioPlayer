@@ -240,13 +240,18 @@ function syncMasterToggle() {
     window.dispatchEvent(new CustomEvent('GMGN_AUDIO_TOGGLE', { detail: { enabled: configCache.isMasterEnabled } }));
 }
 
-async function convertBase64ToBlobUrl(customAudiosObj) {
+function convertBase64ToBlobUrl(customAudiosObj) {
     for (const key in customAudiosObj) {
         const audioItem = customAudiosObj[key];
         if (typeof audioItem.data === 'string' && audioItem.data.startsWith('data:')) {
             try {
-                const res = await fetch(audioItem.data);
-                const blob = await res.blob();
+                // MV3 content script 禁止 fetch data: URI，改用 atob 手动解码
+                const [header, b64] = audioItem.data.split(',');
+                const mime = header.match(/data:(.*?);/)?.[1] || 'audio/mpeg';
+                const binary = atob(b64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const blob = new Blob([bytes], { type: mime });
                 audioItem.data = URL.createObjectURL(blob);
             } catch (e) {
                 console.error("[GMGN 盯盘伴侣] Blob 转换失败:", e);
