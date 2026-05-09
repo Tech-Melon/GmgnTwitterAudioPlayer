@@ -10,6 +10,20 @@ script.dataset.extVersion = chrome.runtime.getManifest().version;
 script.onload = function () { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 
+// 🔓 Autoplay Policy 解锁器：用户首次交互时播放静音音频，解除 Chrome 对 audio.play() 的封锁
+const _unlockAutoplay = () => {
+    const silent = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=");
+    silent.volume = 0;
+    silent.play().then(() => {
+        console.log("🔓 [GMGN 盯盘伴侣] 音频自动播放已解锁");
+    }).catch(() => {});
+    ['click', 'keydown', 'touchstart'].forEach(evt =>
+        document.removeEventListener(evt, _unlockAutoplay, true)
+    );
+};
+['click', 'keydown', 'touchstart'].forEach(evt =>
+    document.addEventListener(evt, _unlockAutoplay, { once: false, capture: true })
+);
     chrome.storage.local.get(null, (result) => {
         configCache.isMasterEnabled = result.isMasterEnabled !== false;
         configCache.enableTwitter = result.enableTwitter !== false;
