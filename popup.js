@@ -184,19 +184,19 @@ document.addEventListener('DOMContentLoaded', () => {
             if (result.ttsRate) {
                 let r = String(result.ttsRate);
                 let migrated = false;
-                if(r === '1.0' || r === '1') { r = '+0%'; migrated = true; }
-                else if(r === '0.9') { r = '-10%'; migrated = true; }
-                else if(r === '1.15') { r = '+15%'; migrated = true; }
-                else if(r === '1.3') { r = '+30%'; migrated = true; }
+                if (r === '1.0' || r === '1') { r = '+0%'; migrated = true; }
+                else if (r === '0.9') { r = '-10%'; migrated = true; }
+                else if (r === '1.15') { r = '+15%'; migrated = true; }
+                else if (r === '1.3') { r = '+30%'; migrated = true; }
                 els.ttsRateSelect.value = r;
                 if (migrated) chrome.storage.local.set({ ttsRate: r });
             }
             if (result.ttsPitch) {
                 let p = String(result.ttsPitch);
                 let migrated = false;
-                if(p === '0Hz' || p === '0') { p = '+0%'; migrated = true; }
-                else if(p === '-20Hz') { p = '-5%'; migrated = true; }
-                else if(p === '+20Hz') { p = '+5%'; migrated = true; }
+                if (p === '0Hz' || p === '0') { p = '+0%'; migrated = true; }
+                else if (p === '-20Hz') { p = '-5%'; migrated = true; }
+                else if (p === '+20Hz') { p = '+5%'; migrated = true; }
                 els.ttsPitchSelect.value = p;
                 if (migrated) chrome.storage.local.set({ ttsPitch: p });
             }
@@ -392,8 +392,8 @@ document.addEventListener('DOMContentLoaded', () => {
                                     audio.removeAttribute('src');
                                     audio.load();
                                     if (audio.__sourceNode) {
-                                        try { audio.__sourceNode.disconnect(); } catch(e){}
-                                        try { audio.__gainNode.disconnect(); } catch(e){}
+                                        try { audio.__sourceNode.disconnect(); } catch (e) { }
+                                        try { audio.__gainNode.disconnect(); } catch (e) { }
                                     }
                                 });
                                 audio.play().catch(e => showToast('TTS 播放失败'));
@@ -474,7 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
     els.ttsRateSelect.addEventListener('change', saveTTSConfig);
     els.ttsPitchSelect.addEventListener('change', saveTTSConfig);
 
-    
+
     // 🌟 钱包专属试听逻辑
     const playWalletTTS = async (text) => {
         const voice = els.ttsVoiceSelect.value;
@@ -527,8 +527,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 audio.removeAttribute('src');
                 audio.load();
                 if (audio.__sourceNode) {
-                    try { audio.__sourceNode.disconnect(); } catch(e){}
-                    try { audio.__gainNode.disconnect(); } catch(e){}
+                    try { audio.__sourceNode.disconnect(); } catch (e) { }
+                    try { audio.__gainNode.disconnect(); } catch (e) { }
                 }
             });
             audio.play().catch(e => showToast('TTS 播放失败'));
@@ -811,8 +811,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const dict = result.walletDictionary || {};
                 let count = 0;
                 items.forEach(item => {
-                    if (item.address && item.rename) {
-                        dict[item.address.toLowerCase()] = { rename: item.rename };
+                    // 兼容旧版的 rename 和新版的 name 字段
+                    const nameToUse = item.rename || item.name;
+                    if (item.address && nameToUse) {
+                        dict[item.address.toLowerCase()] = { rename: nameToUse };
                         count++;
                     }
                 });
