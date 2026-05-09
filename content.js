@@ -402,7 +402,7 @@ async function playNetworkTTS(textItems) {
                     await idb.set(cacheKey, blob);
                 } catch (e) {
                     clearTimeout(timeoutId);
-                    throw e; // 让外层 catch 降级到原生 TTS
+                    throw e; // 让外层 catch 降级到默认提示音
                 }
             }
             return blob;
@@ -413,9 +413,11 @@ async function playNetworkTTS(textItems) {
         const firstAudio = new Audio(firstUrl);
         firstAudio.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
         firstAudio.play().catch(e => { 
-            console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败:", e.name, e.message);
-            URL.revokeObjectURL(firstUrl); 
-            fallbackNativeTTS(text); 
+            console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败，降级到默认提示音:", e.name);
+            URL.revokeObjectURL(firstUrl);
+            if (typeof playConcurrentAudio === 'function') {
+                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+            }
         });
 
         if (items.length > 1) {
@@ -444,8 +446,10 @@ async function playNetworkTTS(textItems) {
             firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); };
         }
     } catch (error) {
-        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] playNetworkTTS 外层捕获错误:", error);
-        fallbackNativeTTS(text);
+        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] CF TTS 失败，降级到默认提示音:", error.message || error);
+        if (typeof playConcurrentAudio === 'function') {
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+        }
     }
 }
 
@@ -470,35 +474,6 @@ function playBlobAudio(blob) {
     });
 }
 
-// 兜底方案：如果没配 Worker 或者断网了，回退到以前的原生 TTS
-function fallbackNativeTTS(text) {
-    const playFinalFallback = () => {
-        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 终极降级：播放默认提示音");
-        if (typeof playConcurrentAudio === 'function') {
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
-        }
-    };
-
-    if (!('speechSynthesis' in window)) {
-        return playFinalFallback();
-    }
-    
-    // 如果并发播放，cancel 会把正在播放的原生 TTS 切掉，导致 onerror 并触发报警，因此将其注释掉
-    // window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'zh-CN';
-    utterance.rate = 1.0;
-    utterance.pitch = 1.05;
-    utterance.volume = Math.min(configCache.globalVolume * 1.5, 1.0);
-    
-    // 🚀 如果连浏览器原生 TTS 都报错失败，则祭出最后一张底牌：默认提示音
-    utterance.onerror = (e) => {
-        console.error("❌ [GMGN 盯盘伴侣 - TTS] 原生 TTS 发生错误:", e.error, e);
-        playFinalFallback();
-    };
-
-    window.speechSynthesis.speak(utterance);
-}
 
 function processTwitterMessage(e) {
     // 平滑清理：当容量超过 1000 时，只清理最老的 100 条，而不是全部清空
