@@ -842,6 +842,8 @@ window.addEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
 const walletLastPlayed = new Map();
 window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
+    // 🌟 跨 Tab 互斥：其他标签页正在播放时，本 Tab 跳过，防止多 Tab 重复播报
+    if ((Date.now() - otherTabLastPlayTime) < 2000) return;
     const item = e.detail;
     if (!item || !item.m || !item.bs) return; // 'm' is maker, 'bs' is token symbol
     
@@ -892,6 +894,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
             walletLastPlayed.set(dbKey, now);
         }
+        audioSyncChannel.postMessage('PLAYING_AUDIO');
         playNetworkTTS([`${rename}买入`, tokenSymbol], 'wallet');
     } else {
         // 🌟 卖出：两阶段流式播报架构
@@ -904,6 +907,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             if (cnt === 'processed') {
                 if (state) return; // 已处理过 processed 阶段
                 walletLastPlayed.set(txHash, 'pending_sell');
+                audioSyncChannel.postMessage('PLAYING_AUDIO');
                 playNetworkTTS([rename], 'wallet'); // 🎤 第一阶段：先播备注名
             } else if (cnt === 'confirm') {
                 const isClearAll = item.ooc === 1;
@@ -924,10 +928,12 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
                 if (state === 'pending_sell') {
                     // 🎤 第二阶段：补播 "减仓/清仓+代币名" 合并为一条 TTS 请求
                     walletLastPlayed.set(txHash, true);
+                    audioSyncChannel.postMessage('PLAYING_AUDIO');
                     playNetworkTTS([`${actionText}${tokenSymbol}`], 'wallet');
                 } else {
                     // 降级兜底：没收到 processed，直接播完整内容
                     walletLastPlayed.set(txHash, true);
+                    audioSyncChannel.postMessage('PLAYING_AUDIO');
                     playNetworkTTS([`${rename}${actionText}${tokenSymbol}`], 'wallet');
                 }
             }
@@ -944,6 +950,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
                 if (isClearAll && configCache.walletFilters.sellClear === false) return;
                 if (!isClearAll && configCache.walletFilters.sellReduce === false) return;
             }
+            audioSyncChannel.postMessage('PLAYING_AUDIO');
             playNetworkTTS([`${rename}${actionText}`, tokenSymbol], 'wallet');
         }
     }
