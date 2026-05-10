@@ -333,7 +333,7 @@ function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => { // 🌟 数组加了高级定制选项
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => { // 🌟 数组加了高级定制选项+旧版字段用于迁移
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (!configCache.defaultAudio) configCache.defaultAudio = 'sounds/default.MP3';
@@ -354,6 +354,64 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     if (result.walletTts) configCache.walletTts = result.walletTts;
     if (result.walletFilters) configCache.walletFilters = result.walletFilters;
     if (result.walletDictionary) configCache.walletDictionary = result.walletDictionary;
+
+    // ════════════════════════════════════════════════════════════
+    // 🔄 一次性存储迁移（旧版 → 新版），迁移完成后回写并清除旧字段
+    // ════════════════════════════════════════════════════════════
+    const migrationWrites = {};  // 需要写入的新字段
+    const migrationDeletes = []; // 需要清除的旧字段
+
+    // 1️⃣ TTS 配置迁移：旧版 ttsVoice/ttsRate/ttsPitch → 新版 twitterTts/walletTts
+    if (!result.twitterTts && (result.ttsVoice || result.ttsRate || result.ttsPitch)) {
+        const oldTts = {
+            voice: result.ttsVoice || 'zh-CN-XiaoxiaoNeural',
+            rate: result.ttsRate || '+0%',
+            pitch: result.ttsPitch || '+0%'
+        };
+        configCache.twitterTts = oldTts;
+        configCache.walletTts = { ...oldTts }; // 钱包也继承旧版设置
+        migrationWrites.twitterTts = oldTts;
+        migrationWrites.walletTts = { ...oldTts };
+        migrationDeletes.push('ttsVoice', 'ttsRate', 'ttsPitch');
+        console.log("🔄 [GMGN 盯盘伴侣 - 迁移] TTS 配置已从旧版迁移:", oldTts);
+    }
+
+    // 2️⃣ 音量迁移：旧版 globalVolume → 新版 twitterVolume/walletVolume
+    if (result.globalVolume !== undefined && result.twitterVolume === undefined) {
+        configCache.twitterVolume = result.globalVolume;
+        configCache.walletVolume = result.globalVolume;
+        migrationWrites.twitterVolume = result.globalVolume;
+        migrationWrites.walletVolume = result.globalVolume;
+        console.log("🔄 [GMGN 盯盘伴侣 - 迁移] 音量已从 globalVolume 迁移:", result.globalVolume);
+    }
+
+    // 3️⃣ 钱包过滤器迁移：旧版 sell:true → 新版 sellReduce/sellClear
+    if (result.walletFilters && result.walletFilters.sell !== undefined && result.walletFilters.sellReduce === undefined) {
+        const oldSell = result.walletFilters.sell;
+        configCache.walletFilters.sellReduce = oldSell;
+        configCache.walletFilters.sellClear = oldSell;
+        delete configCache.walletFilters.sell;
+        migrationWrites.walletFilters = configCache.walletFilters;
+        console.log("🔄 [GMGN 盯盘伴侣 - 迁移] 卖出过滤器已拆分:", { sellReduce: oldSell, sellClear: oldSell });
+    }
+
+    // 4️⃣ defaultAudio 迁移：确保 storage 中有值
+    if (!result.defaultAudio) {
+        migrationWrites.defaultAudio = 'sounds/default.MP3';
+    }
+
+    // 执行回写（仅在有迁移项时触发一次 set + remove）
+    if (Object.keys(migrationWrites).length > 0) {
+        chrome.storage.local.set(migrationWrites, () => {
+            console.log("✅ [GMGN 盯盘伴侣 - 迁移] 已回写新版配置:", Object.keys(migrationWrites));
+        });
+    }
+    if (migrationDeletes.length > 0) {
+        chrome.storage.local.remove(migrationDeletes, () => {
+            console.log("🗑️ [GMGN 盯盘伴侣 - 迁移] 已清除旧版字段:", migrationDeletes);
+        });
+    }
+    // ════════════════════════════════════════════════════════════
 
     if (result.customAudios) {
         configCache.customAudios = result.customAudios;
