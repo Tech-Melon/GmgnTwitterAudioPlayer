@@ -7,6 +7,17 @@ document.addEventListener('DOMContentLoaded', () => {
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
     );
 
+    const fetchTTS = (body) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        return fetch(CF_TTS_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: ctrl.signal
+        }).finally(() => clearTimeout(timer));
+    };
+
     let sharedAudioCtx = null;
     function applyGainToAudio(audio, volume) {
         if (volume <= 1.0) {
@@ -23,6 +34,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 audio.__gainNode = gainNode;
                 audio.__sourceNode.connect(gainNode);
                 gainNode.connect(sharedAudioCtx.destination);
+                audio.addEventListener('ended', () => {
+                    try { audio.__sourceNode.disconnect(); } catch (e) { }
+                    try { audio.__gainNode.disconnect(); } catch (e) { }
+                    delete audio.__sourceNode;
+                    delete audio.__gainNode;
+                }, { once: true });
             }
             audio.__gainNode.gain.value = volume;
         } catch (e) {
@@ -278,13 +295,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let optionsHtml = '';
             defaultOptions.forEach(opt => {
-                optionsHtml += `<div class="custom-dropdown-item" data-value="${opt.id}" data-name="${opt.name}">${opt.name}</div>`;
+                optionsHtml += `<div class="custom-dropdown-item" data-value="${escapeHTML(opt.id)}" data-name="${escapeHTML(opt.name)}">${escapeHTML(opt.name)}</div>`;
             });
 
             els.customAudioList.innerHTML = '';
             Object.entries(customAudios).forEach(([customId, audioData]) => {
                 const fileName = typeof audioData === 'string' ? '未知旧版音频' : audioData.name;
-                optionsHtml += `<div class="custom-dropdown-item" data-value="${customId}" data-name="🎵 ${fileName}">🎵 ${fileName}</div>`;
+                const safeFileName = escapeHTML(fileName);
+                const safeCustomId = escapeHTML(customId);
+                optionsHtml += `<div class="custom-dropdown-item" data-value="${safeCustomId}" data-name="🎵 ${safeFileName}">🎵 ${safeFileName}</div>`;
 
                 const div = document.createElement('div');
                 div.className = 'list-item';
@@ -412,16 +431,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         const playEdgeTTS = async () => {
                             try {
-                                const url = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
-                                const res = await fetch(url, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        text: ttsText,
-                                        voice: els.twitterTtsVoiceSelect.value,
-                                        rate: els.twitterTtsRateSelect.value,
-                                        pitch: els.twitterTtsPitchSelect.value
-                                    })
+                                const res = await fetchTTS({
+                                    text: ttsText,
+                                    voice: els.twitterTtsVoiceSelect.value,
+                                    rate: els.twitterTtsRateSelect.value,
+                                    pitch: els.twitterTtsPitchSelect.value
                                 });
                                 if (!res.ok) throw new Error("TTS Request Failed");
                                 const blob = await res.blob();
@@ -549,11 +563,7 @@ document.addEventListener('DOMContentLoaded', () => {
         els.toast.textContent = "生成语音中...";
         els.toast.classList.add('show');
         try {
-            const res = await fetch(CF_TTS_API, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, voice, rate, pitch })
-            });
+            const res = await fetchTTS({ text, voice, rate, pitch });
             if (!res.ok) throw new Error("TTS Request Failed");
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
@@ -578,11 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const rate = els.twitterTtsRateSelect.value;
         const pitch = els.twitterTtsPitchSelect.value;
         try {
-            const res = await fetch(CF_TTS_API, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, voice, rate, pitch })
-            });
+            const res = await fetchTTS({ text, voice, rate, pitch });
             if (!res.ok) throw new Error("TTS Request Failed");
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
@@ -709,6 +715,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
+        const MAX_AUDIO_SIZE = 50 * 1024 * 1024;  // 50MB
+        const MAX_ZIP_SIZE = 200 * 1024 * 1024;   // 200MB
+
         // 🌟 技巧 2：将并行的 Promise.all 改为串行 await，防止瞬间撑爆内存
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
@@ -716,6 +725,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fileExt = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase();
 
             if (fileExt === 'zip') {
+                if (file.size > MAX_ZIP_SIZE) { failCount++; continue; }
                 try {
                     const zip = new JSZip();
                     const loadedZip = await zip.loadAsync(file);
@@ -742,6 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 } catch (e) { failCount++; }
             } else if (allowedExtensions.includes(fileExt)) {
+                if (file.size > MAX_AUDIO_SIZE) { failCount++; continue; }
                 await new Promise((resolve) => {
                     const reader = new FileReader();
                     reader.onload = function (e) { processAudioData(fileName, e.target.result); resolve(); };
@@ -891,9 +902,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const dict = result.walletDictionary || {};
                 let count = 0;
                 items.forEach(item => {
-                    // 兼容旧版的 rename 和新版的 name 字段
                     const nameToUse = item.rename || item.name;
-                    if (item.address && nameToUse) {
+                    if (item.address && nameToUse && /^[a-zA-Z0-9_\-]{20,70}$/.test(item.address)) {
                         dict[item.address.toLowerCase()] = { rename: nameToUse };
                         count++;
                     }
