@@ -307,7 +307,7 @@ document.addEventListener('visibilitychange', () => {
             chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => {
                 if (chrome.runtime.lastError) return;
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
-            if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
+            configCache.defaultAudio = result.defaultAudio || 'sounds/default.MP3';
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet;
