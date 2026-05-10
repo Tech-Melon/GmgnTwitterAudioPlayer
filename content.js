@@ -3,6 +3,7 @@ let isCacheReady = false;
 let pendingWsMessages = [];
 let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
 let otherTabLastPlayTime = 0; // 绝对时间戳替代 boolean 锁，防止 setTimeout 被 Chrome 节流到 1 分钟导致卡死
+let sharedAudioCtx = null; // 🌟 全局共享 AudioContext（必须在 _unlockAutoplay 之前声明）
 
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('inject.js') + '?v=' + Date.now();
@@ -10,13 +11,29 @@ script.dataset.extVersion = chrome.runtime.getManifest().version;
 script.onload = function () { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 
-// 🔓 Autoplay Policy 解锁器：用户首次交互时播放静音音频，解除 Chrome 对 audio.play() 的封锁
+// 🔓 Autoplay Policy 解锁器：用户首次交互时同时解锁 Audio.play() + AudioContext
 const _unlockAutoplay = () => {
+    // 1️⃣ 解锁 Audio.play()
     const silent = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=");
     silent.volume = 0;
     silent.play().then(() => {
-        console.log("🔓 [GMGN 盯盘伴侣] 音频自动播放已解锁");
+        console.log("🔓 [GMGN 盯盘伴侣] Audio.play() 已解锁");
     }).catch(() => {});
+
+    // 2️⃣ 解锁 AudioContext（GainNode 超级音量依赖此上下文）
+    try {
+        if (!sharedAudioCtx) {
+            sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (sharedAudioCtx.state === 'suspended') {
+            sharedAudioCtx.resume().then(() => {
+                console.log("🔓 [GMGN 盯盘伴侣] AudioContext 已解锁, state:", sharedAudioCtx.state);
+            });
+        }
+    } catch (e) {
+        console.warn("⚠️ [GMGN 盯盘伴侣] AudioContext 解锁失败:", e);
+    }
+
     ['click', 'keydown', 'touchstart'].forEach(evt =>
         document.removeEventListener(evt, _unlockAutoplay, true)
     );
@@ -124,7 +141,7 @@ async function getSafeAudioSrc(src) {
     }
 }
 
-let sharedAudioCtx = null;
+// sharedAudioCtx 已提升到文件顶部声明
 function applyGainToAudio(audio, volume) {
     if (volume <= 1.0) {
         audio.volume = Math.max(0, volume);
