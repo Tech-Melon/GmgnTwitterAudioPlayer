@@ -969,6 +969,36 @@ function handleTwitterMsg(e) {
 window.addEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
 
 const walletLastPlayed = new Map();
+
+// ════════════════════════════════════════════════════════════
+// 🔇 钱包监控双层冷却引擎（BSC 出块 0.45s，拆单机器人每区块可发一笔）
+// Layer 1: 同钱包冷却 — 同一钱包对同一代币的同方向操作，5秒内只播第一笔
+// Layer 2: 同代币全局冷却 — 跨钱包防叠音，首笔完整TTS，后续播短促"滴"声
+// ════════════════════════════════════════════════════════════
+const walletActionCooldown = new Map();  // key: `${maker}_${action}_${ba}` → timestamp
+const WALLET_COOLDOWN_MS = 5000;         // 5秒 ≈ 11个BSC区块
+
+const tokenGlobalCooldown = new Map();   // key: `${ba}_${action}` → timestamp
+const TOKEN_COOLDOWN_MS = 3000;          // 3秒 ≈ 7个BSC区块
+
+/** 🔔 播放极短提示音（880Hz / 80ms），用于并发买入时感知热度 */
+function playShortBeep(source = 'wallet') {
+    try {
+        const ctx = sharedAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const vol = source === 'wallet' ? (configCache.walletVolume || 1.0) : (configCache.twitterVolume || 1.0);
+        osc.type = 'sine';
+        osc.frequency.value = 880;     // A5 高频短促
+        gain.gain.value = 0.3 * Math.min(vol, 1.5);  // 音量跟随用户设置
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.08);  // 仅 80ms
+    } catch (e) {
+        console.warn('🔔 [GMGN 盯盘伴侣] beep 播放失败:', e);
+    }
+}
 window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
     const item = e.detail;
@@ -1018,6 +1048,42 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     // 🔒 跨 Tab 精准去重：检查此事件是否已被其他 Tab 播放
     if (wasPlayedByOtherTab(walletFingerprint)) return;
 
+    const ba = (item.ba || item.a || '').toLowerCase(); // 代币合约地址
+    const now = Date.now();
+    const isSellConfirm = (action === 'sell' && cnt === 'confirm'); // 卖出第二阶段豁免冷却
+
+    // ════════════════════════════════════════════════════════════
+    // 🔇 Layer 1: 同钱包冷却 — 拦截拆单/机器人连击
+    // 同一个钱包对同一个代币的同方向操作，5秒内只播第一笔
+    // 卖出 confirm 阶段豁免（它是两阶段播报的第二段，必须放行）
+    // ════════════════════════════════════════════════════════════
+    if (!isSellConfirm) {
+        const walletCoolKey = `${maker}_${action}_${ba}`;
+        const lastWalletTime = walletActionCooldown.get(walletCoolKey);
+        if (lastWalletTime && (now - lastWalletTime) < WALLET_COOLDOWN_MS) {
+            console.log(`🔇 [钱包冷却] ${rename} 对 ${tokenSymbol} 的 ${action} 在 ${WALLET_COOLDOWN_MS}ms 冷却中，跳过`);
+            return;
+        }
+        walletActionCooldown.set(walletCoolKey, now);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // 🔔 Layer 2: 同代币全局冷却 — 多钱包并发防叠音
+    // 首笔完整 TTS 播报，后续在冷却窗口内只播短促"滴"声（感知热度）
+    // 卖出 confirm 阶段豁免
+    // ════════════════════════════════════════════════════════════
+    if (!isSellConfirm) {
+        const tokenCoolKey = `${ba}_${action}`;
+        const lastTokenTime = tokenGlobalCooldown.get(tokenCoolKey);
+        if (lastTokenTime && (now - lastTokenTime) < TOKEN_COOLDOWN_MS) {
+            console.log(`🔔 [代币热度] ${rename} 也在 ${action} ${tokenSymbol}，播放提示音`);
+            markEventPlayed(walletFingerprint);
+            playShortBeep('wallet');
+            return;
+        }
+        tokenGlobalCooldown.set(tokenCoolKey, now);
+    }
+
     if (action === 'buy') {
         // ✅ 买入：processed 阶段直接播报完整内容，confirm 通过 txHash 去重跳过
         if (txHash) {
@@ -1025,7 +1091,6 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             walletLastPlayed.set(txHash, true);
         } else {
             const dbKey = `${maker}_buy_${tokenSymbol}`;
-            const now = Date.now();
             if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
             walletLastPlayed.set(dbKey, now);
         }
@@ -1075,7 +1140,6 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         } else {
             // 无 txHash 的降级去重逻辑
             const dbKey = `${maker}_sell_${tokenSymbol}`;
-            const now = Date.now();
             if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
             walletLastPlayed.set(dbKey, now);
             const isClearAll = item.ooc === 1;
@@ -1094,5 +1158,14 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (walletLastPlayed.size > 2000) {
         const iter = walletLastPlayed.keys();
         for (let i = 0; i < 1000; i++) walletLastPlayed.delete(iter.next().value);
+    }
+    // 冷却 Map 也需要清理，避免长期运行内存膨胀
+    if (walletActionCooldown.size > 500) {
+        const iter = walletActionCooldown.keys();
+        for (let i = 0; i < 250; i++) walletActionCooldown.delete(iter.next().value);
+    }
+    if (tokenGlobalCooldown.size > 500) {
+        const iter = tokenGlobalCooldown.keys();
+        for (let i = 0; i < 250; i++) tokenGlobalCooldown.delete(iter.next().value);
     }
 });
