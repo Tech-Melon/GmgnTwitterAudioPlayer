@@ -5,7 +5,13 @@
     // 动态拼接版本号
     console.log(`🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (v${version})`);
 
-    const OriginalWebSocket = window.WebSocket;
+    // 🛡️ 幂等保护：扩展热更新时 inject.js 会被多次注入
+    // 必须始终使用真正的原生 WebSocket，而不是上一次注入留下的代理
+    // 否则会形成「代理套代理」导致信号丢失或重复
+    if (!window.__GMGN_ORIGINAL_WS) {
+        window.__GMGN_ORIGINAL_WS = window.WebSocket; // 首次注入：保存原生构造函数
+    }
+    const OriginalWebSocket = window.__GMGN_ORIGINAL_WS; // 始终引用真正的原生 WS
 
     window.__GMGN_AUDIO_ENABLED = true;
     window.addEventListener('GMGN_AUDIO_TOGGLE', function (e) {
