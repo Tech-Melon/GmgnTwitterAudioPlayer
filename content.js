@@ -40,6 +40,7 @@ const _unlockAutoplay = () => {
         configCache.walletTts = result.walletTts || { voice: 'zh-CN-XiaoxiaoNeural', rate: '+0%', pitch: '+0%' };
         configCache.walletFilters = result.walletFilters || { buy: true, sellReduce: true, sellClear: true, minAmount: 0 };
         configCache.walletDictionary = result.walletDictionary || {};
+        configCache.defaultAudio = result.defaultAudio || 'sounds/default.MP3';
     });
 
 // 🌟 新增：配置你的 Cloudflare Worker TTS API 节点
@@ -204,7 +205,8 @@ function initPreloadCache() {
     preloadedAudios.clear();
 
     // 1. 预热默认提示音
-    warmupAudio(chrome.runtime.getURL(configCache.defaultAudio));
+    const defaultSrc = configCache.defaultAudio || 'sounds/default.MP3';
+    warmupAudio(chrome.runtime.getURL(defaultSrc));
 
     // 2. 预热自定义音频 (高速 Blob 链接)
     for (const key in configCache.customAudios) {
@@ -334,6 +336,7 @@ function convertBase64ToBlobUrl(customAudiosObj) {
 chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => { // 🌟 数组加了高级定制选项
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
+    if (!configCache.defaultAudio) configCache.defaultAudio = 'sounds/default.MP3';
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled;
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet;
@@ -488,7 +491,7 @@ async function playNetworkTTS(textItems, source = 'twitter') {
             console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败，降级到默认提示音:", e.name);
             URL.revokeObjectURL(firstUrl);
             if (typeof playConcurrentAudio === 'function') {
-                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio));
+                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'));
             }
         });
 
@@ -541,7 +544,7 @@ async function playNetworkTTS(textItems, source = 'twitter') {
     } catch (error) {
         console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] CF TTS 失败，降级到默认提示音:", error.message || error);
         if (typeof playConcurrentAudio === 'function') {
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), source);
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), source);
         }
     }
 }
@@ -579,7 +582,7 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null) {
                     });
 
                     // 立即降级播放默认音兜底
-                    const fallbackSrc = chrome.runtime.getURL(configCache.defaultAudio);
+                    const fallbackSrc = chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3');
                     if (src !== fallbackSrc) {
                         player = new Audio(fallbackSrc);
                     }
@@ -764,7 +767,7 @@ function processTwitterMessage(e) {
             globalLastPlayTime = now;
             audioSyncChannel.postMessage('PLAYING_AUDIO');
             console.log("🎵 [GMGN 盯盘伴侣] 降级播放默认音频");
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), 'twitter');
+            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), 'twitter');
         } else if (nobodyWantsDefault && !isVipPresent) {
             // 🌟 新增判断：只有当允许播放未映射音频，且距离上次播放大于2秒时，才播放
             if (configCache.playDefaultUnmapped && (now - globalLastPlayTime > 2000)) {
@@ -786,7 +789,7 @@ function processTwitterMessage(e) {
                     playNetworkTTS(unmappedTTS, 'twitter');
                 } else {
                     // 如果关闭了 TTS 开关，则降级为只播放默认的“推特新消息” MP3
-                    playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio), 'twitter');
+                    playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), 'twitter');
                 }
             }
         }
