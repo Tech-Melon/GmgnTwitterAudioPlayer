@@ -1129,7 +1129,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
                     }
                 }
 
-                if (state === 'pending_sell') {
+                if (txState === 'pending_sell') {
                     // 🎤 第二阶段：补播 "减仓/清仓+代币名" 合并为一条 TTS 请求
                     walletLastPlayed.set(txHash, true);
                     markEventPlayed(walletFingerprint);
