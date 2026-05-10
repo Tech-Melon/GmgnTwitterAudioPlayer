@@ -1109,7 +1109,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         if (txHash) {
 
             if (cnt === 'processed') {
-                if (state) return; // 已处理过 processed 阶段
+                if (txState) return; // 已处理过 processed 阶段
                 walletLastPlayed.set(txHash, 'pending_sell');
                 markEventPlayed(walletFingerprint);
                 playNetworkTTS([rename], 'wallet'); // 🎤 第一阶段：先播备注名
