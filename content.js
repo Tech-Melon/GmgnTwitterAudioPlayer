@@ -813,6 +813,19 @@ function processTwitterMessage(e) {
 }
 
 function handleTwitterMsg(e) {
+    // 📡 信号到达日志：无论是否播放，均打印原始信号，方便排障
+    const triggers = (e.detail && Array.isArray(e.detail.triggers)) ? e.detail.triggers : [];
+    const triggerIds = triggers.map(t => t && t.id ? `${t.id}(${t.tw || '?'})` : '?').join(', ');
+    const now = Date.now();
+    const otherTabGap = now - otherTabLastPlayTime;
+    console.log(`📡 [GMGN 盯盘伴侣 - 推特信号] 收到 ${triggers.length} 条 | ${triggerIds}`, {
+        masterOn: configCache.isMasterEnabled,
+        twitterOn: configCache.enableTwitter,
+        cacheReady: isCacheReady,
+        otherTabGap: `${otherTabGap}ms`,
+        willPlay: configCache.isMasterEnabled && configCache.enableTwitter && otherTabGap >= 2000 && isCacheReady
+    });
+
     // 1. 前置拦截：精准判断扩展上下文是否已丢失
     if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
         console.warn("👻 [GMGN 盯盘伴侣] 扩展已更新，旧上下文失效，正在清理遗留监听器。");
@@ -821,7 +834,7 @@ function handleTwitterMsg(e) {
         return;
     }
 
-    if (!configCache.isMasterEnabled || !configCache.enableTwitter || (Date.now() - otherTabLastPlayTime) < 2000) return;
+    if (!configCache.isMasterEnabled || !configCache.enableTwitter || (now - otherTabLastPlayTime) < 2000) return;
     if (!isCacheReady) {
         pendingWsMessages.push(e);
         return;
