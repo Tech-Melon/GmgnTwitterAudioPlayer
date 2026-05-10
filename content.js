@@ -1048,20 +1048,27 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     // 🔒 跨 Tab 精准去重：检查此事件是否已被其他 Tab 播放
     if (wasPlayedByOtherTab(walletFingerprint)) return;
 
+    // ----- 🛡️ 新增：统一的 txHash 状态预检 -----
+    // 如果这个 txHash 已经被完全处理过（TTS），或者被冷却引擎抛弃过，直接忽略
+    let txState = txHash ? walletLastPlayed.get(txHash) : undefined;
+    if (txState === true) return; 
+
     const ba = (item.ba || item.a || '').toLowerCase(); // 代币合约地址
     const now = Date.now();
-    const isSellConfirm = (action === 'sell' && cnt === 'confirm'); // 卖出第二阶段豁免冷却
+    
+    // 只有当这个 txHash 已经被放行了第一阶段（状态为 pending_sell），它的第二阶段才豁免冷却！
+    const isStage2OfAllowedSell = (action === 'sell' && cnt === 'confirm' && txState === 'pending_sell');
 
     // ════════════════════════════════════════════════════════════
     // 🔇 Layer 1: 同钱包冷却 — 拦截拆单/机器人连击
     // 同一个钱包对同一个代币的同方向操作，5秒内只播第一笔
-    // 卖出 confirm 阶段豁免（它是两阶段播报的第二段，必须放行）
     // ════════════════════════════════════════════════════════════
-    if (!isSellConfirm) {
+    if (!isStage2OfAllowedSell) {
         const walletCoolKey = `${maker}_${action}_${ba}`;
         const lastWalletTime = walletActionCooldown.get(walletCoolKey);
         if (lastWalletTime && (now - lastWalletTime) < WALLET_COOLDOWN_MS) {
             console.log(`🔇 [钱包冷却] ${rename} 对 ${tokenSymbol} 的 ${action} 在 ${WALLET_COOLDOWN_MS}ms 冷却中，跳过`);
+            if (txHash) walletLastPlayed.set(txHash, true); // 💀 标记该交易已死亡，防止它的 confirm 阶段绕过冷却
             return;
         }
         walletActionCooldown.set(walletCoolKey, now);
@@ -1070,14 +1077,14 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     // ════════════════════════════════════════════════════════════
     // 🔔 Layer 2: 同代币全局冷却 — 多钱包并发防叠音
     // 首笔完整 TTS 播报，后续在冷却窗口内只播短促"滴"声（感知热度）
-    // 卖出 confirm 阶段豁免
     // ════════════════════════════════════════════════════════════
-    if (!isSellConfirm) {
+    if (!isStage2OfAllowedSell) {
         const tokenCoolKey = `${ba}_${action}`;
         const lastTokenTime = tokenGlobalCooldown.get(tokenCoolKey);
         if (lastTokenTime && (now - lastTokenTime) < TOKEN_COOLDOWN_MS) {
             console.log(`🔔 [代币热度] ${rename} 也在 ${action} ${tokenSymbol}，播放提示音`);
             markEventPlayed(walletFingerprint);
+            if (txHash) walletLastPlayed.set(txHash, true); // 💀 标记该交易已处理为 Beep，防止它的 confirm 阶段再次 Beep
             playShortBeep('wallet');
             return;
         }
@@ -1087,7 +1094,6 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (action === 'buy') {
         // ✅ 买入：processed 阶段直接播报完整内容，confirm 通过 txHash 去重跳过
         if (txHash) {
-            if (walletLastPlayed.has(txHash)) return;
             walletLastPlayed.set(txHash, true);
         } else {
             const dbKey = `${maker}_buy_${tokenSymbol}`;
@@ -1101,8 +1107,6 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         // 第一阶段 (processed)：立刻播报备注名，不等待 ooc 判定，抢占先机
         // 第二阶段 (confirm)：获取 ooc 后判断减仓/清仓，根据用户开关决定是否补播
         if (txHash) {
-            const state = walletLastPlayed.get(txHash);
-            if (state === true) return; // 该交易已完成全部播报
 
             if (cnt === 'processed') {
                 if (state) return; // 已处理过 processed 阶段
