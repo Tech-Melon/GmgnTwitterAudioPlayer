@@ -2,8 +2,35 @@ let configCache = {};
 let isCacheReady = false;
 let pendingWsMessages = [];
 let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
-let otherTabLastPlayTime = 0; // 绝对时间戳替代 boolean 锁，防止 setTimeout 被 Chrome 节流到 1 分钟导致卡死
 let sharedAudioCtx = null; // 🌟 全局共享 AudioContext（必须在 _unlockAutoplay 之前声明）
+
+// ════════════════════════════════════════════════════════════
+// 🔒 跨 Tab 事件指纹去重引擎（替代旧版的 2 秒时间窗口粗暴锁）
+// 原理：用事件内容本身（trigger IDs / txHash）作为指纹，只抑制相同事件
+// BroadcastChannel 传递延迟 <1ms，天然利用多 WS 连接间的到达时差避免竞态
+// ════════════════════════════════════════════════════════════
+const otherTabPlayedEvents = new Map(); // fingerprint -> timestamp
+
+/** 检查此事件是否已被其他 Tab 播放（5 秒 TTL） */
+function wasPlayedByOtherTab(fingerprint) {
+    const ts = otherTabPlayedEvents.get(fingerprint);
+    if (!ts) return false;
+    if (Date.now() - ts > 5000) {
+        otherTabPlayedEvents.delete(fingerprint);
+        return false;
+    }
+    return true;
+}
+
+/** 标记事件已播放并广播给其他 Tab */
+function markEventPlayed(fingerprint) {
+    audioSyncChannel.postMessage({ type: 'EVENT_PLAYED', key: fingerprint });
+    // 懒清理：超过 200 条时删除最老的一半
+    if (otherTabPlayedEvents.size > 200) {
+        const iter = otherTabPlayedEvents.keys();
+        for (let i = 0; i < 100; i++) otherTabPlayedEvents.delete(iter.next().value);
+    }
+}
 
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('inject.js') + '?v=' + Date.now();
@@ -245,8 +272,9 @@ function initPreloadCache() {
 
 
 audioSyncChannel.onmessage = (event) => {
-    if (event.data === 'PLAYING_AUDIO') {
-        otherTabLastPlayTime = Date.now(); // 绝对时间戳，不依赖 setTimeout（它会被 Chrome 后台标签节流）
+    const data = event.data;
+    if (data && typeof data === 'object' && data.type === 'EVENT_PLAYED') {
+        otherTabPlayedEvents.set(data.key, Date.now());
     }
 };
 
@@ -268,8 +296,9 @@ document.addEventListener('visibilitychange', () => {
         } catch (e) { }
         audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
         audioSyncChannel.onmessage = (event) => {
-            if (event.data === 'PLAYING_AUDIO') {
-                otherTabLastPlayTime = Date.now();
+            const data = event.data;
+            if (data && typeof data === 'object' && data.type === 'EVENT_PLAYED') {
+                otherTabPlayedEvents.set(data.key, Date.now());
             }
         };
 
@@ -450,7 +479,11 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     });
 
     if (pendingWsMessages.length > 0) {
-        pendingWsMessages.forEach(processTwitterMessage);
+        pendingWsMessages.forEach(pendingE => {
+            const ts = (pendingE.detail && Array.isArray(pendingE.detail.triggers)) ? pendingE.detail.triggers : [];
+            const ids = ts.map(t => t && t.id ? t.id.trim().toLowerCase() : '').filter(Boolean);
+            processTwitterMessage(pendingE, `tw_${ids.sort().join(',')}`);
+        });
         pendingWsMessages = [];
     }
 });
@@ -744,7 +777,7 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null) {
     });
 }
 
-function processTwitterMessage(e) {
+function processTwitterMessage(e, fingerprint) {
     // 平滑清理：当容量超过 1000 时，只清理最老的 100 条，而不是全部清空
     if (lastPlayTime.size > 1000) {
         let i = 0;
@@ -830,24 +863,24 @@ function processTwitterMessage(e) {
     try {
         if (vipAudioSrc) {
             globalLastPlayTime = now;
-            audioSyncChannel.postMessage('PLAYING_AUDIO');
+            markEventPlayed(fingerprint);
             playConcurrentAudio(vipAudioSrc, 'twitter', ttsInfo); // 🎤 传入 TTS 文本
         } else if (ttsInfo) {
             // 🚀 新增分支：只有纯 TTS，没有任何前置铃声
             globalLastPlayTime = now;
-            audioSyncChannel.postMessage('PLAYING_AUDIO');
+            markEventPlayed(fingerprint);
             playNetworkTTS(ttsInfo, 'twitter');
         } else if (vipFallbackDefault) {
             // 降级情况：文件丢失被迫使用默认音 (不受新开关影响，照常播放)
             globalLastPlayTime = now;
-            audioSyncChannel.postMessage('PLAYING_AUDIO');
+            markEventPlayed(fingerprint);
             console.log("🎵 [GMGN 盯盘伴侣] 降级播放默认音频");
             playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), 'twitter');
         } else if (nobodyWantsDefault && !isVipPresent) {
             // 🌟 新增判断：只有当允许播放未映射音频，且距离上次播放大于2秒时，才播放
             if (configCache.playDefaultUnmapped && (now - globalLastPlayTime > 2000)) {
                 globalLastPlayTime = now;
-                audioSyncChannel.postMessage('PLAYING_AUDIO');
+                markEventPlayed(fingerprint);
 
                 // 🎤 检查是否开启了 TTS，提取触发者名称
                 let unmappedTTS = null;
@@ -890,15 +923,20 @@ function processTwitterMessage(e) {
 function handleTwitterMsg(e) {
     // 📡 信号到达日志：无论是否播放，均打印原始信号，方便排障
     const triggers = (e.detail && Array.isArray(e.detail.triggers)) ? e.detail.triggers : [];
-    const triggerIds = triggers.map(t => t && t.id ? `${t.id}(${t.tw || '?'})` : '?').join(', ');
-    const now = Date.now();
-    const otherTabGap = now - otherTabLastPlayTime;
-    console.log(`📡 [GMGN 盯盘伴侣 - 推特信号] 收到 ${triggers.length} 条 | ${triggerIds}`, {
+    const triggerIds = triggers.map(t => t && t.id ? t.id.trim().toLowerCase() : '').filter(Boolean);
+    const triggerLabel = triggers.map(t => t && t.id ? `${t.id}(${t.tw || '?'})` : '?').join(', ');
+
+    // 🔒 生成事件指纹：所有 trigger ID 排序后拼接（保证不同 Tab 对同一推文指纹一致）
+    const eventFingerprint = `tw_${triggerIds.sort().join(',')}`;
+    const alreadyPlayed = wasPlayedByOtherTab(eventFingerprint);
+
+    console.log(`📡 [GMGN 盯盘伴侣 - 推特信号] 收到 ${triggers.length} 条 | ${triggerLabel}`, {
+        fingerprint: eventFingerprint,
         masterOn: configCache.isMasterEnabled,
         twitterOn: configCache.enableTwitter,
         cacheReady: isCacheReady,
-        otherTabGap: `${otherTabGap}ms`,
-        willPlay: configCache.isMasterEnabled && configCache.enableTwitter && otherTabGap >= 2000 && isCacheReady
+        otherTabPlayed: alreadyPlayed,
+        willPlay: configCache.isMasterEnabled && configCache.enableTwitter && !alreadyPlayed && isCacheReady
     });
 
     // 1. 前置拦截：精准判断扩展上下文是否已丢失
@@ -909,14 +947,14 @@ function handleTwitterMsg(e) {
         return;
     }
 
-    if (!configCache.isMasterEnabled || !configCache.enableTwitter || (now - otherTabLastPlayTime) < 2000) return;
+    if (!configCache.isMasterEnabled || !configCache.enableTwitter || alreadyPlayed) return;
     if (!isCacheReady) {
         pendingWsMessages.push(e);
         return;
     }
 
     try {
-        processTwitterMessage(e);
+        processTwitterMessage(e, eventFingerprint);
     } catch (error) {
         // 2. 精准异常捕获：只拦截上下文失效引发的错误，不掩盖其他真实 Bug
         if (error instanceof Error && error.message.includes('Extension context invalidated')) {
@@ -933,8 +971,6 @@ window.addEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
 const walletLastPlayed = new Map();
 window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
-    // 🌟 跨 Tab 互斥：其他标签页正在播放时，本 Tab 跳过，防止多 Tab 重复播报
-    if ((Date.now() - otherTabLastPlayTime) < 2000) return;
     const item = e.detail;
     if (!item || !item.m || !item.bs) return; // 'm' is maker, 'bs' is token symbol
     
@@ -974,6 +1010,14 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     let rename = walletInfo.rename.trim();
     const txHash = item.h;
 
+    // 🔒 生成钱包事件指纹：txHash 优先，无 txHash 时用 maker+action+symbol
+    const walletFingerprint = txHash
+        ? `wl_${txHash}_${cnt || 'any'}`
+        : `wl_${maker}_${action}_${tokenSymbol}`;
+
+    // 🔒 跨 Tab 精准去重：检查此事件是否已被其他 Tab 播放
+    if (wasPlayedByOtherTab(walletFingerprint)) return;
+
     if (action === 'buy') {
         // ✅ 买入：processed 阶段直接播报完整内容，confirm 通过 txHash 去重跳过
         if (txHash) {
@@ -985,7 +1029,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             if (walletLastPlayed.has(dbKey) && now - walletLastPlayed.get(dbKey) < 2500) return;
             walletLastPlayed.set(dbKey, now);
         }
-        audioSyncChannel.postMessage('PLAYING_AUDIO');
+        markEventPlayed(walletFingerprint);
         playNetworkTTS([`${rename}买入`, tokenSymbol], 'wallet');
     } else {
         // 🌟 卖出：两阶段流式播报架构
@@ -998,7 +1042,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             if (cnt === 'processed') {
                 if (state) return; // 已处理过 processed 阶段
                 walletLastPlayed.set(txHash, 'pending_sell');
-                audioSyncChannel.postMessage('PLAYING_AUDIO');
+                markEventPlayed(walletFingerprint);
                 playNetworkTTS([rename], 'wallet'); // 🎤 第一阶段：先播备注名
             } else if (cnt === 'confirm') {
                 const isClearAll = item.ooc === 1;
@@ -1019,12 +1063,12 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
                 if (state === 'pending_sell') {
                     // 🎤 第二阶段：补播 "减仓/清仓+代币名" 合并为一条 TTS 请求
                     walletLastPlayed.set(txHash, true);
-                    audioSyncChannel.postMessage('PLAYING_AUDIO');
+                    markEventPlayed(walletFingerprint);
                     playNetworkTTS([`${actionText}${tokenSymbol}`], 'wallet');
                 } else {
                     // 降级兜底：没收到 processed，直接播完整内容
                     walletLastPlayed.set(txHash, true);
-                    audioSyncChannel.postMessage('PLAYING_AUDIO');
+                    markEventPlayed(walletFingerprint);
                     playNetworkTTS([`${rename}${actionText}${tokenSymbol}`], 'wallet');
                 }
             }
@@ -1041,7 +1085,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
                 if (isClearAll && configCache.walletFilters.sellClear === false) return;
                 if (!isClearAll && configCache.walletFilters.sellReduce === false) return;
             }
-            audioSyncChannel.postMessage('PLAYING_AUDIO');
+            markEventPlayed(walletFingerprint);
             playNetworkTTS([`${rename}${actionText}`, tokenSymbol], 'wallet');
         }
     }
