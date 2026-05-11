@@ -643,28 +643,56 @@
                     <button id="testWalletBuyBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
                 </div>
                 <!-- 买入冷却器子选项 -->
-                <div id="buyCooldownPanel" style="display: flex; align-items: center; gap: 8px; padding-left: 20px; border-left: 2px solid #e5e5ea; margin-left: 4px;">
-                    <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
-                        <input type="checkbox" id="buyCooldownEnabled"> ↳ 同币冷却
-                    </label>
-                    <input type="range" id="buyCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: var(--primary-color);">
-                    <span id="buyCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                <div id="buyCooldownPanel" style="display: flex; flex-direction: column; gap: 4px; padding-left: 20px; border-left: 2px solid #e5e5ea; margin-left: 4px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
+                            <input type="checkbox" id="buyCooldownEnabled"> ↳ 🪙 同代币冷却
+                        </label>
+                        <input type="range" id="buyCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: var(--primary-color);">
+                        <span id="buyCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
+                            <input type="checkbox" id="buyAddrCooldownEnabled"> ↳ 👛 同钱包冷却
+                        </label>
+                        <input type="range" id="buyAddrCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: #34c759;">
+                        <span id="buyAddrCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                    </div>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSellReduce" checked> 卖出(减仓)</label>
                     <button id="testWalletSellReduceBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
                 </div>
                 <!-- 减仓冷却器子选项 -->
-                <div id="sellReduceCooldownPanel" style="display: flex; align-items: center; gap: 8px; padding-left: 20px; border-left: 2px solid #e5e5ea; margin-left: 4px;">
-                    <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
-                        <input type="checkbox" id="sellReduceCooldownEnabled"> ↳ 同币冷却
-                    </label>
-                    <input type="range" id="sellReduceCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: var(--primary-color);">
-                    <span id="sellReduceCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                <div id="sellReduceCooldownPanel" style="display: flex; flex-direction: column; gap: 4px; padding-left: 20px; border-left: 2px solid #e5e5ea; margin-left: 4px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
+                            <input type="checkbox" id="sellReduceCooldownEnabled"> ↳ 🪙 同代币冷却
+                        </label>
+                        <input type="range" id="sellReduceCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: var(--primary-color);">
+                        <span id="sellReduceCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
+                            <input type="checkbox" id="sellReduceAddrCooldownEnabled"> ↳ 👛 同钱包冷却
+                        </label>
+                        <input type="range" id="sellReduceAddrCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: #34c759;">
+                        <span id="sellReduceAddrCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                    </div>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSellClear" checked> 卖出(清仓)</label>
                     <button id="testWalletSellClearBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+                <!-- 清仓冷却器子选项 -->
+                <div id="sellClearCooldownPanel" style="display: flex; flex-direction: column; gap: 4px; padding-left: 20px; border-left: 2px solid #e5e5ea; margin-left: 4px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sec); margin: 0; white-space: nowrap;">
+                            <input type="checkbox" id="sellClearAddrCooldownEnabled"> ↳ 👛 同钱包冷却
+                        </label>
+                        <input type="range" id="sellClearAddrCooldownTime" min="5" max="60" step="5" value="15" style="flex: 1; height: 4px; accent-color: #34c759;">
+                        <span id="sellClearAddrCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
+                    </div>
                 </div>
             </div>
             <!-- 金额范围筛选 -->

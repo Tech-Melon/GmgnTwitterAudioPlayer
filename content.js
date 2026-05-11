@@ -1028,6 +1028,9 @@ const TOKEN_COOLDOWN_MS = 3000;          // 3秒 ≈ 7个BSC区块
 // 🧊 Layer 3: 用户自定义同币冷却器
 const userTokenCooldown = new Map();     // key: `${ba}_buy` 或 `${ba}_sell` → timestamp
 
+// 🏠 Layer 4: 用户自定义同址冷却器
+const userAddrCooldown = new Map();      // key: `${maker}_buy` 或 `${maker}_sell` 或 `${maker}_clear` → timestamp
+
 /** 🔔 播放极短提示音（880Hz / 80ms），用于并发买入时感知热度 */
 function playShortBeep(source = 'wallet') {
     if (!_autoplayUnlocked) return; // 🛡️ 用户未交互，AudioContext 不可用
@@ -1174,6 +1177,51 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         }
     }
 
+    // ════════════════════════════════════════════════════════════
+    // 🏠 Layer 4: 用户自定义同址冷却器（按钱包地址冷却）
+    // 同一个钱包地址在 N 秒内的同方向操作只播第一笔（不管买/卖什么币）
+    //   ⚠️ 清仓有独立的同址冷却开关
+    // ════════════════════════════════════════════════════════════
+    if (!isStage2OfAllowedSell && maker && configCache.walletFilters) {
+        const wf = configCache.walletFilters;
+        const isClearAll = item.ooc === 1;
+
+        if (action === 'buy' && wf.buyAddrCooldownEnabled && wf.buyAddrCooldownTime > 0) {
+            const addrKey = `${maker}_buy`;
+            const lastTime = userAddrCooldown.get(addrKey);
+            const coolMs = wf.buyAddrCooldownTime * 1000;
+            if (lastTime && (now - lastTime) < coolMs) {
+                console.log(`🏠 [同址冷却] ${rename} 买入在 ${wf.buyAddrCooldownTime}s 冷却中，跳过 (${tokenSymbol})`);
+                if (txHash) walletLastPlayed.set(txHash, true);
+                return;
+            }
+            userAddrCooldown.set(addrKey, now);
+        }
+        // 减仓同址冷却：仅 confirm 阶段且非清仓
+        if (action === 'sell' && cnt === 'confirm' && !isClearAll && wf.sellReduceAddrCooldownEnabled && wf.sellReduceAddrCooldownTime > 0) {
+            const addrKey = `${maker}_sell`;
+            const lastTime = userAddrCooldown.get(addrKey);
+            const coolMs = wf.sellReduceAddrCooldownTime * 1000;
+            if (lastTime && (now - lastTime) < coolMs) {
+                console.log(`🏠 [同址冷却] ${rename} 减仓在 ${wf.sellReduceAddrCooldownTime}s 冷却中，跳过 (${tokenSymbol})`);
+                if (txHash) walletLastPlayed.set(txHash, true);
+                return;
+            }
+            userAddrCooldown.set(addrKey, now);
+        }
+        // 清仓同址冷却：仅 confirm 阶段且为清仓
+        if (action === 'sell' && cnt === 'confirm' && isClearAll && wf.sellClearAddrCooldownEnabled && wf.sellClearAddrCooldownTime > 0) {
+            const addrKey = `${maker}_clear`;
+            const lastTime = userAddrCooldown.get(addrKey);
+            const coolMs = wf.sellClearAddrCooldownTime * 1000;
+            if (lastTime && (now - lastTime) < coolMs) {
+                console.log(`🏠 [同址冷却] ${rename} 清仓在 ${wf.sellClearAddrCooldownTime}s 冷却中，跳过 (${tokenSymbol})`);
+                if (txHash) walletLastPlayed.set(txHash, true);
+                return;
+            }
+            userAddrCooldown.set(addrKey, now);
+        }
+    }
     if (action === 'buy') {
         // ✅ 买入：processed 阶段直接播报完整内容，confirm 通过 txHash 去重跳过
         if (txHash) {
@@ -1193,6 +1241,18 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
 
             if (cnt === 'processed') {
                 if (txState) return; // 已处理过 processed 阶段
+
+                // 🧊 如果有任何卖出冷却器启用，跳过 processed 阶段的提前播报
+                // 因为 confirm 阶段可能被冷却吞掉，导致用户只听到孤立的备注名没有下文
+                // 此时改为让 confirm 阶段走降级兜底路径，一次性播完整内容
+                const wf = configCache.walletFilters || {};
+                const hasSellCooldown = wf.sellReduceCooldownEnabled || wf.sellReduceAddrCooldownEnabled
+                    || wf.sellClearAddrCooldownEnabled;
+                if (hasSellCooldown) {
+                    walletLastPlayed.set(txHash, 'skip_processed'); // 标记跳过，让 confirm 走完整播报
+                    return;
+                }
+
                 walletLastPlayed.set(txHash, 'pending_sell');
                 markEventPlayed(walletFingerprint);
                 playNetworkTTS([rename], 'wallet'); // 🎤 第一阶段：先播备注名
@@ -1218,7 +1278,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
                     markEventPlayed(walletFingerprint);
                     playNetworkTTS([`${actionText}${tokenSymbol}`], 'wallet');
                 } else {
-                    // 降级兜底：没收到 processed，直接播完整内容
+                    // 降级兜底：没收到 processed / 冷却器跳过了 processed → 直接播完整内容
                     walletLastPlayed.set(txHash, true);
                     markEventPlayed(walletFingerprint);
                     playNetworkTTS([`${rename}${actionText}${tokenSymbol}`], 'wallet');
@@ -1259,5 +1319,10 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (userTokenCooldown.size > 500) {
         const iter = userTokenCooldown.keys();
         for (let i = 0; i < 250; i++) userTokenCooldown.delete(iter.next().value);
+    }
+    // 🏠 同址冷却器 Map 清理
+    if (userAddrCooldown.size > 500) {
+        const iter = userAddrCooldown.keys();
+        for (let i = 0; i < 250; i++) userAddrCooldown.delete(iter.next().value);
     }
 });

@@ -119,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
         testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
         testWalletSellReduceBtn: document.getElementById('testWalletSellReduceBtn'),
         testWalletSellClearBtn: document.getElementById('testWalletSellClearBtn'),
-        // 🧊 冷却器 UI 元素
+        // 🧊 冷却器 UI 元素 — 同币冷却
         buyCooldownEnabled: document.getElementById('buyCooldownEnabled'),
         buyCooldownTime: document.getElementById('buyCooldownTime'),
         buyCooldownLabel: document.getElementById('buyCooldownLabel'),
@@ -128,6 +128,17 @@ document.addEventListener('DOMContentLoaded', () => {
         sellReduceCooldownTime: document.getElementById('sellReduceCooldownTime'),
         sellReduceCooldownLabel: document.getElementById('sellReduceCooldownLabel'),
         sellReduceCooldownPanel: document.getElementById('sellReduceCooldownPanel'),
+        // 🏠 冷却器 UI 元素 — 同址冷却
+        buyAddrCooldownEnabled: document.getElementById('buyAddrCooldownEnabled'),
+        buyAddrCooldownTime: document.getElementById('buyAddrCooldownTime'),
+        buyAddrCooldownLabel: document.getElementById('buyAddrCooldownLabel'),
+        sellReduceAddrCooldownEnabled: document.getElementById('sellReduceAddrCooldownEnabled'),
+        sellReduceAddrCooldownTime: document.getElementById('sellReduceAddrCooldownTime'),
+        sellReduceAddrCooldownLabel: document.getElementById('sellReduceAddrCooldownLabel'),
+        sellClearCooldownPanel: document.getElementById('sellClearCooldownPanel'),
+        sellClearAddrCooldownEnabled: document.getElementById('sellClearAddrCooldownEnabled'),
+        sellClearAddrCooldownTime: document.getElementById('sellClearAddrCooldownTime'),
+        sellClearAddrCooldownLabel: document.getElementById('sellClearAddrCooldownLabel'),
         walletMinAmount: document.getElementById('walletMinAmount'),
         walletMaxAmount: document.getElementById('walletMaxAmount'),
         walletMinMcap: document.getElementById('walletMinMcap'),
@@ -290,11 +301,23 @@ document.addEventListener('DOMContentLoaded', () => {
             els.sellReduceCooldownEnabled.checked = !!walletFilters.sellReduceCooldownEnabled;
             els.sellReduceCooldownTime.value = walletFilters.sellReduceCooldownTime || 15;
             els.sellReduceCooldownLabel.textContent = `${els.sellReduceCooldownTime.value}s`;
-            // 冷却器面板联动：买入/减仓关闭时，冷却器置灰
+            // 🏠 回显同址冷却器配置
+            els.buyAddrCooldownEnabled.checked = !!walletFilters.buyAddrCooldownEnabled;
+            els.buyAddrCooldownTime.value = walletFilters.buyAddrCooldownTime || 15;
+            els.buyAddrCooldownLabel.textContent = `${els.buyAddrCooldownTime.value}s`;
+            els.sellReduceAddrCooldownEnabled.checked = !!walletFilters.sellReduceAddrCooldownEnabled;
+            els.sellReduceAddrCooldownTime.value = walletFilters.sellReduceAddrCooldownTime || 15;
+            els.sellReduceAddrCooldownLabel.textContent = `${els.sellReduceAddrCooldownTime.value}s`;
+            els.sellClearAddrCooldownEnabled.checked = !!walletFilters.sellClearAddrCooldownEnabled;
+            els.sellClearAddrCooldownTime.value = walletFilters.sellClearAddrCooldownTime || 15;
+            els.sellClearAddrCooldownLabel.textContent = `${els.sellClearAddrCooldownTime.value}s`;
+            // 冷却器面板联动：买入/减仓/清仓关闭时，冷却器置灰
             els.buyCooldownPanel.style.opacity = els.filterBuy.checked ? '1' : '0.4';
             els.buyCooldownPanel.style.pointerEvents = els.filterBuy.checked ? 'auto' : 'none';
             els.sellReduceCooldownPanel.style.opacity = els.filterSellReduce.checked ? '1' : '0.4';
             els.sellReduceCooldownPanel.style.pointerEvents = els.filterSellReduce.checked ? 'auto' : 'none';
+            els.sellClearCooldownPanel.style.opacity = els.filterSellClear.checked ? '1' : '0.4';
+            els.sellClearCooldownPanel.style.pointerEvents = els.filterSellClear.checked ? 'auto' : 'none';
             els.walletMinAmount.value = walletFilters.minAmount || '';
             els.walletMaxAmount.value = walletFilters.maxAmount || '';
             els.walletMinMcap.value = walletFilters.minMcap || '';
@@ -893,11 +916,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 buy: els.filterBuy.checked,
                 sellReduce: els.filterSellReduce.checked,
                 sellClear: els.filterSellClear.checked,
-                // 🧊 冷却器配置
+                // 🧊 同币冷却器配置
                 buyCooldownEnabled: els.buyCooldownEnabled.checked,
                 buyCooldownTime: parseInt(els.buyCooldownTime.value) || 15,
                 sellReduceCooldownEnabled: els.sellReduceCooldownEnabled.checked,
                 sellReduceCooldownTime: parseInt(els.sellReduceCooldownTime.value) || 15,
+                // 🏠 同址冷却器配置
+                buyAddrCooldownEnabled: els.buyAddrCooldownEnabled.checked,
+                buyAddrCooldownTime: parseInt(els.buyAddrCooldownTime.value) || 15,
+                sellReduceAddrCooldownEnabled: els.sellReduceAddrCooldownEnabled.checked,
+                sellReduceAddrCooldownTime: parseInt(els.sellReduceAddrCooldownTime.value) || 15,
+                sellClearAddrCooldownEnabled: els.sellClearAddrCooldownEnabled.checked,
+                sellClearAddrCooldownTime: parseInt(els.sellClearAddrCooldownTime.value) || 15,
                 minAmount: parseFloat(els.walletMinAmount.value) || 0,
                 maxAmount: parseFloat(els.walletMaxAmount.value) || 0,
                 minMcap: parseFloat(els.walletMinMcap.value) || 0,
@@ -908,7 +938,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-    // 🧊 冷却器滑块实时标签更新 + 联动
+    // 🧊 同币冷却器滑块实时标签更新 + 联动
     els.buyCooldownTime.addEventListener('input', () => {
         els.buyCooldownLabel.textContent = `${els.buyCooldownTime.value}s`;
     });
@@ -920,7 +950,24 @@ document.addEventListener('DOMContentLoaded', () => {
     els.sellReduceCooldownTime.addEventListener('change', saveWalletFilters);
     els.sellReduceCooldownEnabled.addEventListener('change', saveWalletFilters);
 
-    // 买入/减仓主开关联动冷却器面板
+    // 🏠 同址冷却器滑块实时标签更新 + 联动
+    els.buyAddrCooldownTime.addEventListener('input', () => {
+        els.buyAddrCooldownLabel.textContent = `${els.buyAddrCooldownTime.value}s`;
+    });
+    els.buyAddrCooldownTime.addEventListener('change', saveWalletFilters);
+    els.buyAddrCooldownEnabled.addEventListener('change', saveWalletFilters);
+    els.sellReduceAddrCooldownTime.addEventListener('input', () => {
+        els.sellReduceAddrCooldownLabel.textContent = `${els.sellReduceAddrCooldownTime.value}s`;
+    });
+    els.sellReduceAddrCooldownTime.addEventListener('change', saveWalletFilters);
+    els.sellReduceAddrCooldownEnabled.addEventListener('change', saveWalletFilters);
+    els.sellClearAddrCooldownTime.addEventListener('input', () => {
+        els.sellClearAddrCooldownLabel.textContent = `${els.sellClearAddrCooldownTime.value}s`;
+    });
+    els.sellClearAddrCooldownTime.addEventListener('change', saveWalletFilters);
+    els.sellClearAddrCooldownEnabled.addEventListener('change', saveWalletFilters);
+
+    // 买入/减仓/清仓主开关联动冷却器面板
     els.filterBuy.addEventListener('change', () => {
         els.buyCooldownPanel.style.opacity = els.filterBuy.checked ? '1' : '0.4';
         els.buyCooldownPanel.style.pointerEvents = els.filterBuy.checked ? 'auto' : 'none';
@@ -931,7 +978,11 @@ document.addEventListener('DOMContentLoaded', () => {
         els.sellReduceCooldownPanel.style.pointerEvents = els.filterSellReduce.checked ? 'auto' : 'none';
         saveWalletFilters();
     });
-    els.filterSellClear.addEventListener('change', saveWalletFilters);
+    els.filterSellClear.addEventListener('change', () => {
+        els.sellClearCooldownPanel.style.opacity = els.filterSellClear.checked ? '1' : '0.4';
+        els.sellClearCooldownPanel.style.pointerEvents = els.filterSellClear.checked ? 'auto' : 'none';
+        saveWalletFilters();
+    });
     els.walletMinAmount.addEventListener('change', saveWalletFilters);
     els.walletMaxAmount.addEventListener('change', saveWalletFilters);
     els.walletMinMcap.addEventListener('change', saveWalletFilters);
