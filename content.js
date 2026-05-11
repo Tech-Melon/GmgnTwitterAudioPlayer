@@ -971,15 +971,19 @@ window.addEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
 const walletLastPlayed = new Map();
 
 // ════════════════════════════════════════════════════════════
-// 🔇 钱包监控双层冷却引擎（BSC 出块 0.45s，拆单机器人每区块可发一笔）
+// 🔇 钱包监控三层冷却引擎（BSC 出块 0.45s，拆单机器人每区块可发一笔）
 // Layer 1: 同钱包冷却 — 同一钱包对同一代币的同方向操作，5秒内只播第一笔
 // Layer 2: 同代币全局冷却 — 跨钱包防叠音，首笔完整TTS，后续播短促"滴"声
+// Layer 3: 🧊 用户自定义同币冷却器 — 跨所有钱包，按代币合约(CA)冷却，时间可调(5-60s)
 // ════════════════════════════════════════════════════════════
 const walletActionCooldown = new Map();  // key: `${maker}_${action}_${ba}` → timestamp
 const WALLET_COOLDOWN_MS = 5000;         // 5秒 ≈ 11个BSC区块
 
 const tokenGlobalCooldown = new Map();   // key: `${ba}_${action}` → timestamp
 const TOKEN_COOLDOWN_MS = 3000;          // 3秒 ≈ 7个BSC区块
+
+// 🧊 Layer 3: 用户自定义同币冷却器
+const userTokenCooldown = new Map();     // key: `${ba}_buy` 或 `${ba}_sell` → timestamp
 
 /** 🔔 播放极短提示音（880Hz / 80ms），用于并发买入时感知热度 */
 function playShortBeep(source = 'wallet') {
@@ -1091,6 +1095,41 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         tokenGlobalCooldown.set(tokenCoolKey, now);
     }
 
+    // ════════════════════════════════════════════════════════════
+    // 🧊 Layer 3: 用户自定义同币冷却器（跨所有钱包，按 CA 冷却）
+    // 买入冷却器：同一代币合约在 N 秒内只播报第一笔买入
+    // 减仓冷却器：同一代币合约在 N 秒内只播报第一笔减仓
+    //   ⚠️ 关键：清仓(ooc===1)是逃顶信号，绝不被减仓冷却器压制
+    //   ⚠️ processed 阶段无法区分减仓/清仓，仅在 confirm 阶段触发冷却判定
+    // ════════════════════════════════════════════════════════════
+    if (!isStage2OfAllowedSell && ba && configCache.walletFilters) {
+        const wf = configCache.walletFilters;
+        if (action === 'buy' && wf.buyCooldownEnabled && wf.buyCooldownTime > 0) {
+            const userCoolKey = `${ba}_buy`;
+            const lastUserTime = userTokenCooldown.get(userCoolKey);
+            const cooldownMs = wf.buyCooldownTime * 1000;
+            if (lastUserTime && (now - lastUserTime) < cooldownMs) {
+                console.log(`🧊 [用户冷却] ${tokenSymbol} 买入在 ${wf.buyCooldownTime}s 冷却中，跳过 (by ${rename})`);
+                if (txHash) walletLastPlayed.set(txHash, true);
+                return;
+            }
+            userTokenCooldown.set(userCoolKey, now);
+        }
+        // 减仓冷却器：仅 confirm 阶段且非清仓时触发（processed 阶段放行，因为无法区分减仓/清仓）
+        const isClearAll = item.ooc === 1;
+        if (action === 'sell' && cnt === 'confirm' && !isClearAll && wf.sellReduceCooldownEnabled && wf.sellReduceCooldownTime > 0) {
+            const userCoolKey = `${ba}_sell`;
+            const lastUserTime = userTokenCooldown.get(userCoolKey);
+            const cooldownMs = wf.sellReduceCooldownTime * 1000;
+            if (lastUserTime && (now - lastUserTime) < cooldownMs) {
+                console.log(`🧊 [用户冷却] ${tokenSymbol} 减仓在 ${wf.sellReduceCooldownTime}s 冷却中，跳过 (by ${rename})`);
+                if (txHash) walletLastPlayed.set(txHash, true);
+                return;
+            }
+            userTokenCooldown.set(userCoolKey, now);
+        }
+    }
+
     if (action === 'buy') {
         // ✅ 买入：processed 阶段直接播报完整内容，confirm 通过 txHash 去重跳过
         if (txHash) {
@@ -1171,5 +1210,10 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     if (tokenGlobalCooldown.size > 500) {
         const iter = tokenGlobalCooldown.keys();
         for (let i = 0; i < 250; i++) tokenGlobalCooldown.delete(iter.next().value);
+    }
+    // 🧊 用户自定义冷却器 Map 清理
+    if (userTokenCooldown.size > 500) {
+        const iter = userTokenCooldown.keys();
+        for (let i = 0; i < 250; i++) userTokenCooldown.delete(iter.next().value);
     }
 });

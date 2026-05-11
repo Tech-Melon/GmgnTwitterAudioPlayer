@@ -119,6 +119,15 @@ document.addEventListener('DOMContentLoaded', () => {
         testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
         testWalletSellReduceBtn: document.getElementById('testWalletSellReduceBtn'),
         testWalletSellClearBtn: document.getElementById('testWalletSellClearBtn'),
+        // 🧊 冷却器 UI 元素
+        buyCooldownEnabled: document.getElementById('buyCooldownEnabled'),
+        buyCooldownTime: document.getElementById('buyCooldownTime'),
+        buyCooldownLabel: document.getElementById('buyCooldownLabel'),
+        buyCooldownPanel: document.getElementById('buyCooldownPanel'),
+        sellReduceCooldownEnabled: document.getElementById('sellReduceCooldownEnabled'),
+        sellReduceCooldownTime: document.getElementById('sellReduceCooldownTime'),
+        sellReduceCooldownLabel: document.getElementById('sellReduceCooldownLabel'),
+        sellReduceCooldownPanel: document.getElementById('sellReduceCooldownPanel'),
         walletMinAmount: document.getElementById('walletMinAmount'),
         walletMaxAmount: document.getElementById('walletMaxAmount'),
         walletMinMcap: document.getElementById('walletMinMcap'),
@@ -274,6 +283,18 @@ document.addEventListener('DOMContentLoaded', () => {
             els.filterBuy.checked = walletFilters.buy !== false;
             els.filterSellReduce.checked = walletFilters.sellReduce !== false;
             els.filterSellClear.checked = walletFilters.sellClear !== false;
+            // 🧊 回显冷却器配置
+            els.buyCooldownEnabled.checked = !!walletFilters.buyCooldownEnabled;
+            els.buyCooldownTime.value = walletFilters.buyCooldownTime || 15;
+            els.buyCooldownLabel.textContent = `${els.buyCooldownTime.value}s`;
+            els.sellReduceCooldownEnabled.checked = !!walletFilters.sellReduceCooldownEnabled;
+            els.sellReduceCooldownTime.value = walletFilters.sellReduceCooldownTime || 15;
+            els.sellReduceCooldownLabel.textContent = `${els.sellReduceCooldownTime.value}s`;
+            // 冷却器面板联动：买入/减仓关闭时，冷却器置灰
+            els.buyCooldownPanel.style.opacity = els.filterBuy.checked ? '1' : '0.4';
+            els.buyCooldownPanel.style.pointerEvents = els.filterBuy.checked ? 'auto' : 'none';
+            els.sellReduceCooldownPanel.style.opacity = els.filterSellReduce.checked ? '1' : '0.4';
+            els.sellReduceCooldownPanel.style.pointerEvents = els.filterSellReduce.checked ? 'auto' : 'none';
             els.walletMinAmount.value = walletFilters.minAmount || '';
             els.walletMaxAmount.value = walletFilters.maxAmount || '';
             els.walletMinMcap.value = walletFilters.minMcap || '';
@@ -872,6 +893,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 buy: els.filterBuy.checked,
                 sellReduce: els.filterSellReduce.checked,
                 sellClear: els.filterSellClear.checked,
+                // 🧊 冷却器配置
+                buyCooldownEnabled: els.buyCooldownEnabled.checked,
+                buyCooldownTime: parseInt(els.buyCooldownTime.value) || 15,
+                sellReduceCooldownEnabled: els.sellReduceCooldownEnabled.checked,
+                sellReduceCooldownTime: parseInt(els.sellReduceCooldownTime.value) || 15,
                 minAmount: parseFloat(els.walletMinAmount.value) || 0,
                 maxAmount: parseFloat(els.walletMaxAmount.value) || 0,
                 minMcap: parseFloat(els.walletMinMcap.value) || 0,
@@ -882,8 +908,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-    els.filterBuy.addEventListener('change', saveWalletFilters);
-    els.filterSellReduce.addEventListener('change', saveWalletFilters);
+    // 🧊 冷却器滑块实时标签更新 + 联动
+    els.buyCooldownTime.addEventListener('input', () => {
+        els.buyCooldownLabel.textContent = `${els.buyCooldownTime.value}s`;
+    });
+    els.buyCooldownTime.addEventListener('change', saveWalletFilters);
+    els.buyCooldownEnabled.addEventListener('change', saveWalletFilters);
+    els.sellReduceCooldownTime.addEventListener('input', () => {
+        els.sellReduceCooldownLabel.textContent = `${els.sellReduceCooldownTime.value}s`;
+    });
+    els.sellReduceCooldownTime.addEventListener('change', saveWalletFilters);
+    els.sellReduceCooldownEnabled.addEventListener('change', saveWalletFilters);
+
+    // 买入/减仓主开关联动冷却器面板
+    els.filterBuy.addEventListener('change', () => {
+        els.buyCooldownPanel.style.opacity = els.filterBuy.checked ? '1' : '0.4';
+        els.buyCooldownPanel.style.pointerEvents = els.filterBuy.checked ? 'auto' : 'none';
+        saveWalletFilters();
+    });
+    els.filterSellReduce.addEventListener('change', () => {
+        els.sellReduceCooldownPanel.style.opacity = els.filterSellReduce.checked ? '1' : '0.4';
+        els.sellReduceCooldownPanel.style.pointerEvents = els.filterSellReduce.checked ? 'auto' : 'none';
+        saveWalletFilters();
+    });
     els.filterSellClear.addEventListener('change', saveWalletFilters);
     els.walletMinAmount.addEventListener('change', saveWalletFilters);
     els.walletMaxAmount.addEventListener('change', saveWalletFilters);
