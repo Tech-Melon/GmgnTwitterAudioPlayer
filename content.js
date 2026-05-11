@@ -1107,8 +1107,8 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     const ba = (item.ba || item.a || '').toLowerCase(); // 代币合约地址
     const now = Date.now();
     
-    // 只有当这个 txHash 已经被放行了第一阶段（状态为 pending_sell），它的第二阶段才豁免冷却！
-    const isStage2OfAllowedSell = (action === 'sell' && cnt === 'confirm' && txState === 'pending_sell');
+    // 只有当这个 txHash 已经被放行了第一阶段（pending_sell / skip_processed），它的第二阶段才豁免冷却！
+    const isStage2OfAllowedSell = (action === 'sell' && cnt === 'confirm' && (txState === 'pending_sell' || txState === 'skip_processed'));
 
     // ════════════════════════════════════════════════════════════
     // 🔇 Layer 1: 同钱包冷却 — 拦截拆单/机器人连击
