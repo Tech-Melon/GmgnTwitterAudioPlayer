@@ -39,7 +39,11 @@ script.onload = function () { this.remove(); };
 (document.head || document.documentElement).appendChild(script);
 
 // 🔓 Autoplay Policy 解锁器：用户首次交互时同时解锁 Audio.play() + AudioContext
+let _autoplayUnlocked = false;
 const _unlockAutoplay = () => {
+    if (_autoplayUnlocked) return;
+    _autoplayUnlocked = true;
+
     // 1️⃣ 解锁 Audio.play()
     const silent = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=");
     silent.volume = 0;
@@ -61,6 +65,10 @@ const _unlockAutoplay = () => {
         console.warn("⚠️ [GMGN 盯盘伴侣] AudioContext 解锁失败:", e);
     }
 
+    // 3️⃣ 移除提示条（如果存在）
+    const banner = document.getElementById('gmgn-audio-unlock-banner');
+    if (banner) banner.remove();
+
     ['click', 'keydown', 'touchstart'].forEach(evt =>
         document.removeEventListener(evt, _unlockAutoplay, true)
     );
@@ -68,6 +76,34 @@ const _unlockAutoplay = () => {
 ['click', 'keydown', 'touchstart'].forEach(evt =>
     document.addEventListener(evt, _unlockAutoplay, { once: false, capture: true })
 );
+
+// 🔔 延迟检测：3秒后若用户仍未交互，注入视觉提示条引导点击
+setTimeout(() => {
+    if (_autoplayUnlocked) return;
+    const banner = document.createElement('div');
+    banner.id = 'gmgn-audio-unlock-banner';
+    banner.textContent = '🔊 点击页面任意位置，解锁 GMGN 盯盘伴侣音频播报';
+    banner.style.cssText = `
+        position: fixed; top: 0; left: 0; right: 0; z-index: 999999;
+        background: linear-gradient(135deg, #ff9500, #ff6b00);
+        color: #fff; text-align: center; padding: 10px 16px;
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        box-shadow: 0 2px 12px rgba(255,149,0,0.4);
+        animation: gmgn-banner-pulse 2s ease-in-out infinite;
+    `;
+    // 注入动画样式
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes gmgn-banner-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.85; }
+        }
+    `;
+    document.head.appendChild(style);
+    banner.addEventListener('click', _unlockAutoplay);
+    document.body.appendChild(banner);
+    console.log("🔔 [GMGN 盯盘伴侣] 音频未解锁，已显示提示条");
+}, 3000);
     chrome.storage.local.get(null, (result) => {
         configCache.isMasterEnabled = result.isMasterEnabled !== false;
         configCache.enableTwitter = result.enableTwitter !== false;
