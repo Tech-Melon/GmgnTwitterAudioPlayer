@@ -1062,5 +1062,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // 🌟 处理钱包设置面板的展开/收起下拉逻辑
+    document.querySelectorAll('.toggle-panel-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const targetId = e.currentTarget.dataset.target;
+            const targetEl = document.getElementById(targetId);
+            if (targetEl.style.display === 'none' || targetEl.style.display === '') {
+                targetEl.style.display = 'flex';
+                e.currentTarget.innerHTML = '⚙️ ▲';
+            } else {
+                targetEl.style.display = 'none';
+                e.currentTarget.innerHTML = '⚙️ ▼';
+            }
+        });
+    });
+
     loadData();
 });
