@@ -1109,6 +1109,8 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     
     // 只有当这个 txHash 已经被放行了第一阶段（pending_sell / skip_processed），它的第二阶段才豁免冷却！
     const isStage2OfAllowedSell = (action === 'sell' && cnt === 'confirm' && (txState === 'pending_sell' || txState === 'skip_processed'));
+    // 只有当 txState 为 pending_sell 时，才真正跳过用户冷却（Layer 3 和 4），因为 skip_processed 明确表示需要将用户冷却检查延后到 confirm 阶段
+    const bypassUserCooldowns = isStage2OfAllowedSell && txState !== 'skip_processed';
 
     // 预准备调试日志文本，便于观察哪些播报被冷却拦截
     const isLogClearAll = item.ooc === 1;
@@ -1154,7 +1156,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     //   ⚠️ 关键：清仓(ooc===1)是逃顶信号，绝不被减仓冷却器压制
     //   ⚠️ processed 阶段无法区分减仓/清仓，仅在 confirm 阶段触发冷却判定
     // ════════════════════════════════════════════════════════════
-    if (!isStage2OfAllowedSell && ba && configCache.walletFilters) {
+    if (!bypassUserCooldowns && ba && configCache.walletFilters) {
         const wf = configCache.walletFilters;
         if (action === 'buy' && wf.buyCooldownEnabled && wf.buyCooldownTime > 0) {
             const userCoolKey = `${ba}_buy`;
@@ -1187,7 +1189,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     // 同一个钱包地址在 N 秒内的同方向操作只播第一笔（不管买/卖什么币）
     //   ⚠️ 清仓有独立的同址冷却开关
     // ════════════════════════════════════════════════════════════
-    if (!isStage2OfAllowedSell && maker && configCache.walletFilters) {
+    if (!bypassUserCooldowns && maker && configCache.walletFilters) {
         const wf = configCache.walletFilters;
         const isClearAll = item.ooc === 1;
 
