@@ -1110,6 +1110,11 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
     // 只有当这个 txHash 已经被放行了第一阶段（pending_sell / skip_processed），它的第二阶段才豁免冷却！
     const isStage2OfAllowedSell = (action === 'sell' && cnt === 'confirm' && (txState === 'pending_sell' || txState === 'skip_processed'));
 
+    // 预准备调试日志文本，便于观察哪些播报被冷却拦截
+    const isLogClearAll = item.ooc === 1;
+    const logActionText = action === 'buy' ? '买入' : (isLogClearAll ? '清仓' : '减仓');
+    const fullLogText = `${rename}${logActionText}${tokenSymbol}`;
+
     // ════════════════════════════════════════════════════════════
     // 🔇 Layer 1: 同钱包冷却 — 拦截拆单/机器人连击
     // 同一个钱包对同一个代币的同方向操作，5秒内只播第一笔
@@ -1118,7 +1123,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         const walletCoolKey = `${maker}_${action}_${ba}`;
         const lastWalletTime = walletActionCooldown.get(walletCoolKey);
         if (lastWalletTime && (now - lastWalletTime) < WALLET_COOLDOWN_MS) {
-            console.log(`🔇 [钱包冷却] ${rename} 对 ${tokenSymbol} 的 ${action} 在 ${WALLET_COOLDOWN_MS}ms 冷却中，跳过`);
+            console.log(`🔇 [GMGN 盯盘伴侣 - TTS (wallet)] 钱包冷却拦截: ${fullLogText}`);
             if (txHash) walletLastPlayed.set(txHash, true); // 💀 标记该交易已死亡，防止它的 confirm 阶段绕过冷却
             return;
         }
@@ -1133,7 +1138,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         const tokenCoolKey = `${ba}_${action}`;
         const lastTokenTime = tokenGlobalCooldown.get(tokenCoolKey);
         if (lastTokenTime && (now - lastTokenTime) < TOKEN_COOLDOWN_MS) {
-            console.log(`🔔 [代币热度] ${rename} 也在 ${action} ${tokenSymbol}，播放提示音`);
+            console.log(`🔔 [GMGN 盯盘伴侣 - TTS (wallet)] 代币热度降级(仅滴声): ${fullLogText}`);
             markEventPlayed(walletFingerprint);
             if (txHash) walletLastPlayed.set(txHash, true); // 💀 标记该交易已处理为 Beep，防止它的 confirm 阶段再次 Beep
             playShortBeep('wallet');
@@ -1156,7 +1161,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastUserTime = userTokenCooldown.get(userCoolKey);
             const cooldownMs = wf.buyCooldownTime * 1000;
             if (lastUserTime && (now - lastUserTime) < cooldownMs) {
-                console.log(`🧊 [用户冷却] ${tokenSymbol} 买入在 ${wf.buyCooldownTime}s 冷却中，跳过 (by ${rename})`);
+                console.log(`🧊 [GMGN 盯盘伴侣 - TTS (wallet)] 同币买入冷却拦截: ${fullLogText}`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1169,7 +1174,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastUserTime = userTokenCooldown.get(userCoolKey);
             const cooldownMs = wf.sellReduceCooldownTime * 1000;
             if (lastUserTime && (now - lastUserTime) < cooldownMs) {
-                console.log(`🧊 [用户冷却] ${tokenSymbol} 减仓在 ${wf.sellReduceCooldownTime}s 冷却中，跳过 (by ${rename})`);
+                console.log(`🧊 [GMGN 盯盘伴侣 - TTS (wallet)] 同币减仓冷却拦截: ${fullLogText}`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1191,7 +1196,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastTime = userAddrCooldown.get(addrKey);
             const coolMs = wf.buyAddrCooldownTime * 1000;
             if (lastTime && (now - lastTime) < coolMs) {
-                console.log(`🏠 [同址冷却] ${rename} 买入在 ${wf.buyAddrCooldownTime}s 冷却中，跳过 (${tokenSymbol})`);
+                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址买入冷却拦截: ${fullLogText}`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1203,7 +1208,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastTime = userAddrCooldown.get(addrKey);
             const coolMs = wf.sellReduceAddrCooldownTime * 1000;
             if (lastTime && (now - lastTime) < coolMs) {
-                console.log(`🏠 [同址冷却] ${rename} 减仓在 ${wf.sellReduceAddrCooldownTime}s 冷却中，跳过 (${tokenSymbol})`);
+                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址减仓冷却拦截: ${fullLogText}`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1215,7 +1220,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastTime = userAddrCooldown.get(addrKey);
             const coolMs = wf.sellClearAddrCooldownTime * 1000;
             if (lastTime && (now - lastTime) < coolMs) {
-                console.log(`🏠 [同址冷却] ${rename} 清仓在 ${wf.sellClearAddrCooldownTime}s 冷却中，跳过 (${tokenSymbol})`);
+                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址清仓冷却拦截: ${fullLogText}`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
