@@ -1,9 +1,6 @@
 (function () {
-    // 🌟 新增：读取注入当前脚本的 script 标签上的版本号
-    const version = document.currentScript ? document.currentScript.dataset.extVersion : '未知版本';
-
-    // 动态拼接版本号
-    console.log(`🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (v${version})`);
+    // 动态拼接版本号 (由于改为 world: MAIN 注入，无法直接读取 script.dataset，改为静态显示)
+    console.log(`🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (注入机制优化版)`);
 
     // 🛡️ 幂等保护：扩展热更新时 inject.js 会被多次注入
     // 必须始终使用真正的原生 WebSocket，而不是上一次注入留下的代理
@@ -19,6 +16,7 @@
     });
 
     window.WebSocket = function (url, protocols) {
+        console.log(`🔗 [GMGN 盯盘伴侣 - Inject] 成功捕获 WebSocket 连接创建:`, url);
         const ws = new OriginalWebSocket(url, protocols);
 
         ws.addEventListener('message', function (event) {

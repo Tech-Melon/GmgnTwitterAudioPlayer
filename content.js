@@ -32,11 +32,7 @@ function markEventPlayed(fingerprint) {
     }
 }
 
-const script = document.createElement('script');
-script.src = chrome.runtime.getURL('inject.js') + '?v=' + Date.now();
-script.dataset.extVersion = chrome.runtime.getManifest().version;
-script.onload = function () { this.remove(); };
-(document.head || document.documentElement).appendChild(script);
+// 注入移交至 manifest.json 中的 world: "MAIN" 保证绝对的同步执行
 
 // 🔓 Autoplay Policy 解锁器：用户首次交互时同时解锁 Audio.play() + AudioContext
 let _autoplayUnlocked = false;
