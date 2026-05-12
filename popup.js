@@ -148,7 +148,10 @@ document.addEventListener('DOMContentLoaded', () => {
         walletDictInput: document.getElementById('walletDictInput'),
         importWalletDictBtn: document.getElementById('importWalletDictBtn'),
         clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
-        walletDictStatus: document.getElementById('walletDictStatus')
+        walletDictStatus: document.getElementById('walletDictStatus'),
+        customWalletName: document.getElementById('customWalletName'),
+        customWalletAddress: document.getElementById('customWalletAddress'),
+        addCustomWalletBtn: document.getElementById('addCustomWalletBtn')
     };
 
     function showToast(message, duration = 2000) {
@@ -1015,6 +1018,39 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             showToast('JSON 格式错误: ' + e.message, 3000);
         }
+    });
+
+    els.addCustomWalletBtn.addEventListener('click', () => {
+        const name = els.customWalletName.value.trim();
+        const address = els.customWalletAddress.value.trim();
+        
+        if (!name) return showToast('请输入钱包名称');
+        if (!address) return showToast('请输入钱包地址');
+        if (!/^[a-zA-Z0-9_\-]{20,70}$/.test(address)) {
+            return showToast('钱包地址格式不正确', 3000);
+        }
+
+        chrome.storage.local.get(['walletDictionary'], (result) => {
+            const dict = result.walletDictionary || {};
+            const lowerAddr = address.toLowerCase();
+
+            // 检查是否重复
+            if (dict[lowerAddr]) {
+                const oldName = dict[lowerAddr].rename;
+                if (!confirm(`该钱包地址已存在，当前名称为 [${oldName}]。是否要将其覆盖为 [${name}]？`)) {
+                    return; // 用户取消覆盖
+                }
+            }
+
+            dict[lowerAddr] = { rename: name };
+            
+            chrome.storage.local.set({ walletDictionary: dict }, () => {
+                showToast(`成功添加单地址: ${name}`);
+                els.customWalletName.value = '';
+                els.customWalletAddress.value = '';
+                loadData();
+            });
+        });
     });
 
     els.clearWalletDictBtn.addEventListener('click', () => {

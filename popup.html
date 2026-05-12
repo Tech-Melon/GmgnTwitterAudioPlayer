@@ -746,6 +746,14 @@
                 <button id="clearWalletDictBtn" class="outline" style="color: #ff3b30; border-color: #ff3b30;">清空</button>
             </div>
             <div id="walletDictStatus" style="font-size: 12px; color: var(--text-sec); margin-top: 8px;">已导入: 0 个地址</div>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #d2d2d7;">
+                <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 6px;">手动添加单地址 <i style="color: #ff9500; font-size: 11px;">(注: 需在GMGN页面关注该钱包)</i></span>
+                <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+                    <input type="text" id="customWalletName" placeholder="如: 聪明钱A" style="flex: 1; padding: 6px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                    <input type="text" id="customWalletAddress" placeholder="0x..." style="flex: 2; padding: 6px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box;">
+                </div>
+                <button id="addCustomWalletBtn" class="outline" style="width: 100%; border-color: #34c759; color: #34c759;">➕ 添加单地址</button>
+            </div>
         </div>
     </div>
     
