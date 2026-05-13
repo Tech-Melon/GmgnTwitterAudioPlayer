@@ -24,7 +24,11 @@ function wasPlayedByOtherTab(fingerprint) {
 
 /** 标记事件已播放并广播给其他 Tab */
 function markEventPlayed(fingerprint) {
-    audioSyncChannel.postMessage({ type: 'EVENT_PLAYED', key: fingerprint });
+    try {
+        audioSyncChannel.postMessage({ type: 'EVENT_PLAYED', key: fingerprint });
+    } catch (e) {
+        // 扩展热更新后 BroadcastChannel 已关闭，静默忽略
+    }
     // 懒清理：超过 200 条时删除最老的一半
     if (otherTabPlayedEvents.size > 200) {
         const iter = otherTabPlayedEvents.keys();
@@ -711,7 +715,9 @@ async function playNetworkTTS(textItems, source = 'twitter') {
                     AudioPool.release(player);
                 };
                 player.play().catch(e => {
-                    console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播放段失败:", e.name);
+                    if (e.name !== 'NotAllowedError') {
+                        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播放段失败:", e.name);
+                    }
                     blobUrls.forEach(u => URL.revokeObjectURL(u));
                     AudioPool.release(player);
                 });
