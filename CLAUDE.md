@@ -26,16 +26,66 @@ This file provides guidance to Claude Code when working with the `GmgnTwitterAud
 - 确保 Service Worker (Background scripts) 的逻辑非持久化且能正确被唤醒。
 - 在处理 DOM 和 Content Scripts 时，注意 Twitter 页面的动态渲染特性，优先使用 MutationObserver 而不是简单的定时器。
 
-## 📦 打包与发布规范
+## 📦 提交与打包标准化流程 (MANDATORY)
 
-当需要打包此 Chrome 扩展时，请遵循以下流程：
-- **版本号维护**：如需升级版本，只需修改根目录 `manifest.json` 中的 `version` 字段。
-- **一键打包脚本**：必须运行 `scripts/pack.py` 脚本执行打包（`python scripts/pack.py`）。该脚本会自动读取 `manifest.json` 中的版本号，自动删除目录下的旧版压缩包（`GmgnTwitterAudioPlayer-v*.zip`），并生成包含核心文件和资源目录的新版本 ZIP 文件。
-- **免维护原则**：打包脚本已经通用化，打包时直接运行该脚本即可。
+当需要提交代码并打包 Chrome 扩展时，**必须严格按照以下步骤顺序执行**，不可跳步或自行编写替代脚本：
 
-## 常用命令 (请根据实际情况调整)
+### Step 1: 语法检查
+```bash
+node -c content.js
+node -c inject.js
+node -c popup.js
+node -c background.js
+```
+所有 JS 文件必须通过 `node -c` 语法校验，零错误才能继续。
+
+### Step 2: 升级版本号
+修改 `manifest.json` 中的 `version` 字段（遵循 semver）：
+- **patch**（x.y.Z）：Bug 修复、日志优化、代码重构
+- **minor**（x.Y.0）：新增功能特性、UI 改版
+- **major**（X.0.0）：架构级别的不兼容改动
+
+### Step 3: Git 提交与推送
+使用 `tmp/_run_xxx.py` 临时脚本封装 git 命令（遵守根目录纯洁性原则）：
+```python
+# tmp/_run_git_push.py
+import subprocess, sys
+COMMANDS = [
+    ['git', 'add', '-A'],
+    ['git', 'commit', '-m', '<conventional commit message>'],
+    ['git', 'push', 'origin', 'main'],
+]
+# ...
+```
+Commit message 必须使用 Conventional Commits 格式：`feat:` / `fix:` / `refactor:` / `chore:`
+
+### Step 4: 执行打包
+**必须使用项目自带的打包脚本**，严禁自行编写打包逻辑：
+```bash
+python scripts/pack.py
+```
+该脚本会自动：
+- 读取 `manifest.json` 版本号
+- 清理旧版 ZIP 包
+- 生成 `GmgnTwitterAudioPlayer-v{version}.zip`
+- 输出商店发布文案（如有）
+
+### ⚠️ 禁止事项
+- ❌ 跳过语法检查直接提交
+- ❌ 自行编写打包脚本替代 `scripts/pack.py`
+- ❌ 手动拼装 ZIP 文件
+- ❌ 在根目录创建 `_run_*.py` 临时脚本（必须放 `tmp/` 目录）
+
+## 常用命令
 
 ```bash
-# 假设你有这些命令，让 Claude 知道如何构建或测试你的插件
-# npm install
-# npm run build
+# 语法检查
+node -c content.js
+
+# 打包扩展
+python scripts/pack.py
+
+# Git 状态
+git status
+git log -5 --oneline
+```
