@@ -40,12 +40,16 @@ const _unlockAutoplay = () => {
     if (_autoplayUnlocked) return;
     _autoplayUnlocked = true;
 
-    // 1️⃣ 解锁 Audio.play()
-    const silent = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=");
-    silent.volume = 0;
-    silent.play().then(() => {
-        console.log("🔓 [GMGN 盯盘伴侣] Audio.play() 已解锁");
-    }).catch(() => {});
+    // 1️⃣ 解锁 Audio.play()（从对象池借用，避免创建新实例）
+    const silent = AudioPool.acquire();
+    if (silent) {
+        silent.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+        silent.volume = 0;
+        silent.play().then(() => {
+            console.log("🔓 [GMGN 盯盘伴侣] Audio.play() 已解锁");
+            AudioPool.release(silent);
+        }).catch(() => { AudioPool.release(silent); });
+    }
 
     // 2️⃣ 解锁 AudioContext（GainNode 超级音量依赖此上下文）
     try {
@@ -180,118 +184,131 @@ const idb = {
 };
 
 // 🌟 新增核心：极速内存预热引擎
-let preloadedAudios = new Map();
-let isRebuildingBlob = false; // 🌟 新增：全局 Blob 重建锁
+// ════════════════════════════════════════════════════════════
+// 🏊 Audio 固定对象池 — 彻底消灭 WebMediaPlayer 泄漏
+// 核心原则：启动时创建 20 个 Audio 实例，永不增减
+// 播放时并发借用，全部占满才排队，播完归还
+// ════════════════════════════════════════════════════════════
+const AudioPool = {
+    _pool: [],       // 所有 Audio 实例（固定 20 个）
+    _idle: [],       // 空闲实例索引（FIFO 队列）
+    _queue: [],      // 待播放任务队列（仅当池满时排队）
+    SIZE: 20,
 
-const extensionBlobs = {};
-
-async function getSafeAudioSrc(src) {
-    if (!src.startsWith('chrome-extension://')) return src;
-    if (extensionBlobs[src]) return extensionBlobs[src];
-    try {
-        const res = await fetch(src);
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        extensionBlobs[src] = url;
-        return url;
-    } catch (e) {
-        console.error("[GMGN 盯盘伴侣] 预热时转换内部音频失败:", e);
-        return src;
-    }
-}
-
-// sharedAudioCtx 已提升到文件顶部声明
-function applyGainToAudio(audio, volume) {
-    if (volume <= 1.0) {
-        audio.volume = Math.max(0, volume);
-        return;
-    }
-    audio.volume = 1.0; // 基础音量拉满
-
-    // 🛡️ Autoplay 未解锁时，禁止触碰 AudioContext
-    // createMediaElementSource() 是不可逆操作，一旦绑定到 suspended 的 AudioContext 会导致
-    // 后续所有播放报 NotSupportedError: "Failed to load because no supported source was found"
-    if (!_autoplayUnlocked) {
-        return; // 降级为原生 100% 音量，等用户交互后下一次播放才走增益
-    }
-
-    // 🔥 防御静音 Bug：在 Content Script 中，如果不带 crossOrigin 的原生链接经过 Web Audio API 会输出静默！
-    const isSafe = audio.crossOrigin === "anonymous" || 
-                  (audio.src && (audio.src.startsWith('blob:') || audio.src.startsWith('data:')));
-    
-    if (!isSafe) {
-        console.warn("[GMGN 盯盘伴侣] 跨域音频安全回退，为防静音，限制最高 100% 音量");
-        return;
-    }
-
-    try {
-        if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
-        
-        if (!audio.__sourceNode) {
-            audio.__sourceNode = sharedAudioCtx.createMediaElementSource(audio);
-            const gainNode = sharedAudioCtx.createGain();
-            audio.__gainNode = gainNode;
-            audio.__sourceNode.connect(gainNode);
-            gainNode.connect(sharedAudioCtx.destination);
+    init() {
+        for (let i = 0; i < this.SIZE; i++) {
+            const audio = new Audio();
+            audio.__poolIdx = i;
+            audio.__inUse = false;
+            this._pool.push(audio);
+            this._idle.push(i);
         }
-        audio.__gainNode.gain.value = volume;
-    } catch (e) {
-        console.warn("[GMGN 盯盘伴侣] 超级音量(Web Audio API)增益失败，降级为 100% 音量:", e);
-    }
-}
+        console.log(`🏊 [GMGN 盯盘伴侣] Audio 对象池已初始化, 容量: ${this.SIZE}`);
+    },
 
-async function warmupAudio(src) {
-    if (!src) return;
-    if (!preloadedAudios.has(src)) {
-        preloadedAudios.set(src, null); // 占位，防止并发重复获取
-        const safeSrc = await getSafeAudioSrc(src);
-        const audio = new Audio();
-        audio.crossOrigin = "anonymous"; // 允许 Web Audio API 跨域处理
-        audio.preload = 'auto'; // 强制浏览器在后台拉取并立刻解码音频
-        audio.src = safeSrc;
-        audio.load();           // 将音频载入驻留内存
-        preloadedAudios.set(src, audio);
-    }
-}
+    /** 尝试获取空闲 Audio，无空闲返回 null */
+    acquire() {
+        if (this._idle.length === 0) return null;
+        const idx = this._idle.shift();
+        const audio = this._pool[idx];
+        audio.__inUse = true;
+        return audio;
+    },
 
-// 🌟 优化：保持严谨的异常处理边界
-function checkAudioHealth(audio) {
-    if (!audio) return false;
-
-    try {
-        return audio.readyState >= 2 && audio.networkState !== 3;
-    } catch (error) {
-        // 仅捕获预期的 DOM 异常或类型异常
-        if (error instanceof TypeError || error instanceof DOMException) {
-            console.warn("⚠️ [GMGN 盯盘伴侣] 音频节点状态异常 (预期内):", error.name);
-            return false;
-        }
-        // 未知系统级异常，绝不生吞，直接抛出
-        throw error;
-    }
-}
-
-// 🌟 将所有可能播放的音频提前灌入内存池
-function initPreloadCache() {
-    // 🌟 核心修复 1：彻底销毁旧的 Audio 实例，防止内存泄漏和解码器堆积
-    preloadedAudios.forEach((audio) => {
-        if (!audio) return; // 跳过异步预热中的 null 占位符
+    /** 归还 Audio 到空闲池 + 触发队列消费 */
+    release(audio) {
+        if (!audio || audio.__poolIdx === undefined || !audio.__inUse) return;
         try {
             audio.pause();
+            audio.onended = null;
+            audio.onerror = null;
             audio.removeAttribute('src');
-            audio.load(); // 强制浏览器切断底层音频流的占用
-        } catch (e) {
-            console.warn("⚠️ [GMGN 盯盘伴侣] 清理旧音频实例时出错:", e);
+            audio.load(); // 释放底层解码器，但不影响 sourceNode/gainNode 绑定
+        } catch (e) { /* 忽略清理异常 */ }
+        audio.__inUse = false;
+        this._idle.push(audio.__poolIdx);
+        this._drain();
+    },
+
+    /**
+     * 请求播放：有空闲实例直接并发执行，否则排队等待
+     * @param {Function} taskFn - 接收 (audio) 参数的播放回调
+     */
+    play(taskFn) {
+        const audio = this.acquire();
+        if (audio) {
+            taskFn(audio);
+        } else {
+            if (this._queue.length >= 30) {
+                this._queue.shift();
+                console.warn("⚠️ [GMGN 盯盘伴侣] 播放队列已满，丢弃最旧任务");
+            }
+            this._queue.push(taskFn);
+        }
+    },
+
+    /** 消费等待队列 */
+    _drain() {
+        while (this._queue.length > 0 && this._idle.length > 0) {
+            const task = this._queue.shift();
+            const audio = this.acquire();
+            if (audio) task(audio);
+        }
+    },
+
+    /** 获取状态信息（调试用） */
+    status() {
+        return { total: this.SIZE, idle: this._idle.length, queued: this._queue.length };
+    }
+};
+
+// 🏊 立即初始化对象池（Audio 元素创建不需要用户交互）
+AudioPool.init();
+
+// ════════════════════════════════════════════════════════════
+// 🗄️ Blob 数据预热缓存 — 纯数据层，不占 WebMediaPlayer 配额
+// ════════════════════════════════════════════════════════════
+const blobCache = new Map(); // src → blobUrl（字符串）
+
+async function warmupAudio(src) {
+    if (!src || blobCache.has(src)) return;
+    blobCache.set(src, null); // 占位，防止并发重复获取
+    try {
+        let fetchUrl = src;
+        // chrome-extension:// URL 需要先 fetch 转 Blob（页面上下文跨域限制）
+        if (src.startsWith('chrome-extension://')) {
+            fetchUrl = src;
+        }
+        // data: URI 和 blob: URL 不需要预热
+        if (src.startsWith('data:') || src.startsWith('blob:')) {
+            blobCache.set(src, src); // 直接缓存原始 URL
+            return;
+        }
+        const res = await fetch(fetchUrl);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        blobCache.set(src, blobUrl);
+    } catch (e) {
+        blobCache.delete(src); // 失败时移除占位，允许下次重试
+        console.warn("⚠️ [GMGN 盯盘伴侣] 音频预热失败:", src, e.message);
+    }
+}
+
+// 🌟 将所有可能播放的音频提前灌入 Blob 缓存
+function initPreloadCache() {
+    // 回收旧的 Blob URL（避免内存泄漏）
+    blobCache.forEach((blobUrl, src) => {
+        if (blobUrl && blobUrl.startsWith('blob:') && !src.startsWith('blob:')) {
+            URL.revokeObjectURL(blobUrl);
         }
     });
-    preloadedAudios.clear();
+    blobCache.clear();
 
     // 1. 预热默认提示音
     const defaultSrc = configCache.defaultAudio || 'sounds/default.MP3';
     warmupAudio(chrome.runtime.getURL(defaultSrc));
 
-    // 2. 预热自定义音频 (高速 Blob 链接)
+    // 2. 预热自定义音频 (Blob 链接直接缓存)
     for (const key in configCache.customAudios) {
         const audioItem = configCache.customAudios[key];
         if (audioItem && audioItem.data) warmupAudio(audioItem.data);
@@ -305,7 +322,48 @@ function initPreloadCache() {
             warmupAudio(chrome.runtime.getURL(`sounds/${audioId}`));
         }
     }
-    console.log("🚀 [GMGN 盯盘伴侣] 音频底座预热完成，进入 0 毫秒响应待命状态！");
+    console.log(`🚀 [GMGN 盯盘伴侣] Blob 预热完成 | 对象池状态:`, AudioPool.status());
+}
+
+// sharedAudioCtx 已提升到文件顶部声明
+function applyGainToAudio(audio, volume) {
+    // 已绑定 GainNode 的池 Audio：统一通过 GainNode 控制音量（createMediaElementSource 不可逆）
+    if (audio.__gainNode) {
+        audio.__gainNode.gain.value = volume;
+        audio.volume = 1.0;
+        return;
+    }
+
+    // 未绑定 GainNode：音量 ≤100% 直接用原生 volume
+    if (volume <= 1.0) {
+        audio.volume = Math.max(0, volume);
+        return;
+    }
+    audio.volume = 1.0;
+
+    // 🛡️ Autoplay 未解锁时，禁止触碰 AudioContext
+    if (!_autoplayUnlocked) return;
+
+    // 🔥 防御静音 Bug：非 blob/data 源不走 Web Audio API
+    const isSafe = audio.crossOrigin === "anonymous" ||
+                  (audio.src && (audio.src.startsWith('blob:') || audio.src.startsWith('data:')));
+    if (!isSafe) return;
+
+    try {
+        if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
+
+        // 首次绑定（永久），后续复用时直走上方 __gainNode 分支
+        if (!audio.__sourceNode) {
+            audio.__sourceNode = sharedAudioCtx.createMediaElementSource(audio);
+            audio.__gainNode = sharedAudioCtx.createGain();
+            audio.__sourceNode.connect(audio.__gainNode);
+            audio.__gainNode.connect(sharedAudioCtx.destination);
+        }
+        audio.__gainNode.gain.value = volume;
+    } catch (e) {
+        console.warn("[GMGN 盯盘伴侣] 超级音量增益失败，降级为 100% 音量:", e);
+    }
 }
 
 
@@ -582,121 +640,92 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
 let lastPlayTime = new Map();
 let globalLastPlayTime = 0;
 
-// 🎤 云端 TTS 极速播放引擎 (双层缓存架构)
+// 🎤 云端 TTS 极速播放引擎 (AudioPool 池化版 + 双层缓存)
 async function playNetworkTTS(textItems, source = 'twitter') {
     const items = Array.isArray(textItems) ? textItems : [textItems];
     if (items.length === 0 || !items[0]) return;
-    const text = items[0];
     console.log(`🔊 [GMGN 盯盘伴侣 - TTS (${source})] 播报:`, items.join(' → '));
 
-    // 获取对应的 TTS 配置
     const ttsConfig = source === 'wallet' ? (configCache.walletTts || {}) : (configCache.twitterTts || {});
     const voice = ttsConfig.voice || 'zh-CN-XiaoxiaoNeural';
     const rate = ttsConfig.rate || '+0%';
     const pitch = ttsConfig.pitch || '+0%';
 
-    // 获取对应音量
     const defaultVol = configCache.globalVolume !== undefined ? configCache.globalVolume : 1;
     const targetVolume = source === 'wallet' 
         ? (configCache.walletVolume !== undefined ? configCache.walletVolume : defaultVol)
         : (configCache.twitterVolume !== undefined ? configCache.twitterVolume : defaultVol);
 
+    const fetchAudioBlob = async (textChunk) => {
+        const cacheKey = `${textChunk}_${voice}_${rate}_${pitch}`;
+        let blob = await idb.get(cacheKey);
+        if (!blob) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            try {
+                const res = await fetch(`${CF_TTS_API}/tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: textChunk, voice, rate, pitch }),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
+                blob = await res.blob();
+                await idb.set(cacheKey, blob);
+            } catch (e) {
+                clearTimeout(timeoutId);
+                throw e;
+            }
+        }
+        return blob;
+    };
+
     try {
-        const fetchAudioBlob = async (textChunk) => {
-            const cacheKey = `${textChunk}_${voice}_${rate}_${pitch}`;
-            let blob = await idb.get(cacheKey);
-            if (!blob) {
-                // 🛡️ 超时保护：防止 CF Worker 冷启动或网络波动时 fetch 永久 hang 住
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 5000);
-                try {
-                    const url = `${CF_TTS_API}/tts`;
-                    const res = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: textChunk, voice: voice, rate: rate, pitch: pitch }),
-                        signal: controller.signal
-                    });
-                    clearTimeout(timeoutId);
-                    if (!res.ok) throw new Error(`CF Worker 返回错误: ${res.status}`);
-                    blob = await res.blob();
-                    await idb.set(cacheKey, blob);
-                } catch (e) {
-                    clearTimeout(timeoutId);
-                    throw e; // 让外层 catch 降级到默认提示音
+        // 预取所有段的 Blob（并行请求，串行播放）
+        const blobs = await Promise.all(
+            items.map(item => fetchAudioBlob(item).catch(() => null))
+        );
+        const validBlobs = blobs.filter(b => b !== null);
+        if (validBlobs.length === 0) throw new Error('所有 TTS 段获取失败');
+
+        // 🏊 从池中借一个 Audio，多段串行复用同一实例，播完归还
+        AudioPool.play((player) => {
+            player.crossOrigin = "anonymous";
+            let blobUrls = []; // 记录所有创建的 Blob URL，统一回收
+
+            const playSegment = (idx) => {
+                if (idx >= validBlobs.length) {
+                    blobUrls.forEach(u => URL.revokeObjectURL(u));
+                    AudioPool.release(player);
+                    return;
                 }
-            }
-            return blob;
-        };
+                const url = URL.createObjectURL(validBlobs[idx]);
+                blobUrls.push(url);
+                player.src = url;
+                applyGainToAudio(player, targetVolume * 1.5);
 
-        const blob1 = await fetchAudioBlob(text);
-        const firstUrl = URL.createObjectURL(blob1);
-        const firstAudio = new Audio(firstUrl);
-        firstAudio.crossOrigin = "anonymous";
-        applyGainToAudio(firstAudio, targetVolume * 1.5);
-        firstAudio.play().catch(e => { 
-            console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob首段播放失败，降级到默认提示音:", e.name);
-            URL.revokeObjectURL(firstUrl);
-            if (typeof playConcurrentAudio === 'function') {
-                playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'));
-            }
-        });
-
-        if (items.length > 1) {
-            const prefetchPromises = [];
-            for (let i = 1; i < items.length; i++) prefetchPromises.push(fetchAudioBlob(items[i]).catch(e => null));
-            const resolvedBlobs = Promise.all(prefetchPromises); // 只 resolve 一次，后续递归直接复用
-            
-            const playNext = async (index) => {
-                const blobList = await resolvedBlobs;
-                const nextBlob = blobList[index - 1];
-                if (!nextBlob) { return; }
-                const nextUrl = URL.createObjectURL(nextBlob);
-                const nextAudio = new Audio(nextUrl);
-                nextAudio.crossOrigin = "anonymous";
-                applyGainToAudio(nextAudio, targetVolume * 1.5);
-                nextAudio.onended = () => { 
-                    URL.revokeObjectURL(nextUrl); 
-                    if (nextAudio.__sourceNode) {
-                        try { nextAudio.__sourceNode.disconnect(); } catch(e){}
-                        try { nextAudio.__gainNode.disconnect(); } catch(e){}
-                    }
-                    if (index + 1 < items.length) playNext(index + 1); 
+                player.onended = () => playSegment(idx + 1);
+                player.onerror = () => {
+                    blobUrls.forEach(u => URL.revokeObjectURL(u));
+                    AudioPool.release(player);
                 };
-                nextAudio.onerror = () => { URL.revokeObjectURL(nextUrl); };
-                nextAudio.play().catch(e => {
-                    console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] Cloud TTS Blob后续播放失败:", e.name, e.message);
-                    URL.revokeObjectURL(nextUrl);
+                player.play().catch(e => {
+                    console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播放段失败:", e.name);
+                    blobUrls.forEach(u => URL.revokeObjectURL(u));
+                    AudioPool.release(player);
                 });
             };
-            firstAudio.onended = () => { 
-                URL.revokeObjectURL(firstUrl); 
-                if (firstAudio.__sourceNode) {
-                    try { firstAudio.__sourceNode.disconnect(); } catch(e){}
-                    try { firstAudio.__gainNode.disconnect(); } catch(e){}
-                }
-                playNext(1); 
-            };
-            firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); playNext(1); };
-        } else {
-            firstAudio.onended = () => { 
-                URL.revokeObjectURL(firstUrl); 
-                if (firstAudio.__sourceNode) {
-                    try { firstAudio.__sourceNode.disconnect(); } catch(e){}
-                    try { firstAudio.__gainNode.disconnect(); } catch(e){}
-                }
-            };
-            firstAudio.onerror = () => { URL.revokeObjectURL(firstUrl); };
-        }
+
+            playSegment(0);
+        });
     } catch (error) {
         console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] CF TTS 失败，降级到默认提示音:", error.message || error);
-        if (typeof playConcurrentAudio === 'function') {
-            playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), source);
-        }
+        playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), source);
     }
 }
 
-// 🌟 统一的 playConcurrentAudio（合并了预热克隆逻辑与双通道配置）
+// 🌟 统一的 playConcurrentAudio（AudioPool 池化版）
 function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null) {
     if (!src) return;
     const defaultVol = configCache.globalVolume !== undefined ? configCache.globalVolume : 1;
@@ -704,116 +733,51 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null) {
         ? (configCache.walletVolume !== undefined ? configCache.walletVolume : defaultVol)
         : (configCache.twitterVolume !== undefined ? configCache.twitterVolume : defaultVol);
 
-    let player;
-    const cachedAudio = preloadedAudios.get(src);
+    // 优先使用 Blob 缓存的 URL（预热时已转换）
+    const playUrl = blobCache.get(src) || src;
 
-    // 检查缓存的音频是否健康
-    if (cachedAudio && checkAudioHealth(cachedAudio)) {
-        // cloneNode(true) 能以微秒级速度直接拷贝已解码的音频节点结构
-        player = cachedAudio.cloneNode(true);
-    } else {
-        // 🔥 关键修复：如果是 Blob URL 失效，需要重新生成 Blob
-        if (cachedAudio) {
-            console.warn("⚠️ [GMGN 盯盘伴侣] 音频缓存已失效，正在重新加载:", src);
-            preloadedAudios.delete(src);
+    // 如果缓存还在预热中（占位 null），降级用原始 src
+    const finalUrl = playUrl || src;
 
-            // 如果是 Blob URL 失效，尝试从 customAudios 重新生成
-            if (src.startsWith('blob:')) {
-                const customKey = Object.keys(configCache.customAudios).find(
-                    key => configCache.customAudios[key].data === src
-                );
-                if (customKey) {
-                    console.warn("🔄 [GMGN 盯盘伴侣] Blob URL 失效，触发重建:", {
-                        customKey,
-                        oldSrc: src.substring(0, 50) + '...'
-                    });
+    // 🏊 从池中借用 Audio，播完归还
+    AudioPool.play((player) => {
+        // Blob/data URL 设置 crossOrigin 以支持 Web Audio API 增益
+        if (finalUrl.startsWith('blob:') || finalUrl.startsWith('data:')) {
+            player.crossOrigin = "anonymous";
+        } else {
+            player.crossOrigin = null;
+        }
 
-                    // 立即降级播放默认音兜底
-                    const fallbackSrc = chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3');
-                    if (src !== fallbackSrc) {
-                        player = new Audio(fallbackSrc);
-                    }
+        player.src = finalUrl;
+        applyGainToAudio(player, targetVolume);
 
-                    // 🌟 核心修复：加入重建锁，阻断并发重入风暴
-                    if (typeof isRebuildingBlob !== 'undefined' && !isRebuildingBlob) {
-                        isRebuildingBlob = true;
-                        console.log("🔒 [GMGN 盯盘伴侣] 发起单例 Blob 重建任务...");
+        player.onended = () => {
+            AudioPool.release(player);
+        };
 
-                        chrome.storage.local.get(['customAudios'], async (result) => {
-                            if (result.customAudios) {
-                                for (const key in configCache.customAudios) {
-                                    const oldData = configCache.customAudios[key].data;
-                                    if (typeof oldData === 'string' && oldData.startsWith('blob:')) {
-                                        URL.revokeObjectURL(oldData);
-                                    }
-                                }
-                                configCache.customAudios = result.customAudios;
-                                await convertBase64ToBlobUrl(configCache.customAudios);
-                                initPreloadCache();
-                                isRebuildingBlob = false; // 解锁
-                                console.log("🔓 [GMGN 盯盘伴侣] Blob 重建任务完成！");
-                            } else {
-                                isRebuildingBlob = false;
-                            }
-                        });
-                    }
-                }
+        player.onerror = (e) => {
+            console.warn("⚠️ [GMGN 盯盘伴侣] 音频播放错误:", e);
+            AudioPool.release(player);
+            if (ttsFallbackText) {
+                playNetworkTTS(ttsFallbackText, source);
             }
-        }
+        };
 
-        // 🚨 核心修复：只有在 player 没有被兜底逻辑接管时，才创建新的 Audio
-        if (!player) {
-            const safeSrc = typeof extensionBlobs !== 'undefined' ? extensionBlobs[src] : null;
-            if (safeSrc) {
-                player = new Audio(safeSrc);
-                player.crossOrigin = "anonymous";
-            } else {
-                player = new Audio(src); // 没有安全源时，不加 crossOrigin 防止请求直接被浏览器拦截
+        player.play().catch(e => {
+            if (e.name !== 'NotAllowedError') {
+                console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", { error: e.name, message: e.message });
             }
-            // 缓存未命中或失效时，尝试重新预热
-            if (typeof warmupAudio === 'function') warmupAudio(src);
-        }
-    }
-
-    // 默认音效和定制音效走统一的增益逻辑
-    applyGainToAudio(player, targetVolume);
-
-    // 🌟 播放结束后释放资源，防止 GainNode / MediaElementSource 内存泄漏
-    const cleanup = () => {
-        if (!player) return;
-        player.pause();
-        player.removeAttribute('src');
-        player.load();
-        if (player.__sourceNode) {
-            try { player.__sourceNode.disconnect(); } catch(e){}
-            try { player.__gainNode.disconnect(); } catch(e){}
-        }
-        player.removeEventListener('ended', cleanup);
-        player.removeEventListener('error', handleError);
-        player = null;
-    };
-
-    const handleError = (e) => {
-        console.warn("⚠️ [GMGN 盯盘伴侣] 主音频源异常，尝试纯 TTS 降级:", e);
-        cleanup();
-        if (ttsFallbackText) {
-            playNetworkTTS(ttsFallbackText, source);
-        }
-    };
-
-    player.addEventListener('ended', cleanup);
-    player.addEventListener('error', handleError);
-
-    // 🔊 执行播放
-    player.play().catch(e => {
-        if (e.name !== 'NotAllowedError') {
-            console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", { error: e.name, message: e.message });
-        }
-        cleanup();
-        if (ttsFallbackText) {
-            playNetworkTTS(ttsFallbackText, source);
-        }
+            AudioPool.release(player);
+            if (ttsFallbackText) {
+                playNetworkTTS(ttsFallbackText, source);
+            }
+        });
     });
+
+    // 缓存未命中时，触发后台预热（下次播放时可用）
+    if (!blobCache.has(src)) {
+        warmupAudio(src);
+    }
 }
 
 function processTwitterMessage(e, fingerprint) {
@@ -1121,7 +1085,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         const walletCoolKey = `${maker}_${action}_${ba}`;
         const lastWalletTime = walletActionCooldown.get(walletCoolKey);
         if (lastWalletTime && (now - lastWalletTime) < WALLET_COOLDOWN_MS) {
-            console.log(`🔇 [GMGN 盯盘伴侣 - TTS (wallet)] 钱包冷却拦截: ${fullLogText}`);
+            console.log(`🔇 [GMGN 盯盘伴侣 - TTS (wallet)] 钱包冷却拦截: ${fullLogText} (剩余 ${((WALLET_COOLDOWN_MS - (now - lastWalletTime)) / 1000).toFixed(1)}s)`);
             if (txHash) walletLastPlayed.set(txHash, true); // 💀 标记该交易已死亡，防止它的 confirm 阶段绕过冷却
             return;
         }
@@ -1136,7 +1100,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         const tokenCoolKey = `${ba}_${action}`;
         const lastTokenTime = tokenGlobalCooldown.get(tokenCoolKey);
         if (lastTokenTime && (now - lastTokenTime) < TOKEN_COOLDOWN_MS) {
-            console.log(`🔔 [GMGN 盯盘伴侣 - TTS (wallet)] 代币热度降级(仅滴声): ${fullLogText}`);
+            console.log(`🔔 [GMGN 盯盘伴侣 - TTS (wallet)] 代币热度降级(仅滴声): ${fullLogText} (剩余 ${((TOKEN_COOLDOWN_MS - (now - lastTokenTime)) / 1000).toFixed(1)}s)`);
             markEventPlayed(walletFingerprint);
             if (txHash) walletLastPlayed.set(txHash, true); // 💀 标记该交易已处理为 Beep，防止它的 confirm 阶段再次 Beep
             playShortBeep('wallet');
@@ -1159,7 +1123,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastUserTime = userTokenCooldown.get(userCoolKey);
             const cooldownMs = wf.buyCooldownTime * 1000;
             if (lastUserTime && (now - lastUserTime) < cooldownMs) {
-                console.log(`🧊 [GMGN 盯盘伴侣 - TTS (wallet)] 同币买入冷却拦截: ${fullLogText}`);
+                console.log(`🧊 [GMGN 盯盘伴侣 - TTS (wallet)] 同币买入冷却拦截: ${fullLogText} (剩余 ${((cooldownMs - (now - lastUserTime)) / 1000).toFixed(1)}s)`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1172,7 +1136,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastUserTime = userTokenCooldown.get(userCoolKey);
             const cooldownMs = wf.sellReduceCooldownTime * 1000;
             if (lastUserTime && (now - lastUserTime) < cooldownMs) {
-                console.log(`🧊 [GMGN 盯盘伴侣 - TTS (wallet)] 同币减仓冷却拦截: ${fullLogText}`);
+                console.log(`🧊 [GMGN 盯盘伴侣 - TTS (wallet)] 同币减仓冷却拦截: ${fullLogText} (剩余 ${((cooldownMs - (now - lastUserTime)) / 1000).toFixed(1)}s)`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1194,7 +1158,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastTime = userAddrCooldown.get(addrKey);
             const coolMs = wf.buyAddrCooldownTime * 1000;
             if (lastTime && (now - lastTime) < coolMs) {
-                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址买入冷却拦截: ${fullLogText}`);
+                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址买入冷却拦截: ${fullLogText} (剩余 ${((coolMs - (now - lastTime)) / 1000).toFixed(1)}s)`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1206,7 +1170,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastTime = userAddrCooldown.get(addrKey);
             const coolMs = wf.sellReduceAddrCooldownTime * 1000;
             if (lastTime && (now - lastTime) < coolMs) {
-                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址减仓冷却拦截: ${fullLogText}`);
+                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址减仓冷却拦截: ${fullLogText} (剩余 ${((coolMs - (now - lastTime)) / 1000).toFixed(1)}s)`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }
@@ -1218,7 +1182,7 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
             const lastTime = userAddrCooldown.get(addrKey);
             const coolMs = wf.sellClearAddrCooldownTime * 1000;
             if (lastTime && (now - lastTime) < coolMs) {
-                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址清仓冷却拦截: ${fullLogText}`);
+                console.log(`🏠 [GMGN 盯盘伴侣 - TTS (wallet)] 同址清仓冷却拦截: ${fullLogText} (剩余 ${((coolMs - (now - lastTime)) / 1000).toFixed(1)}s)`);
                 if (txHash) walletLastPlayed.set(txHash, true);
                 return;
             }

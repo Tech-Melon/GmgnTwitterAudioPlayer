@@ -2,6 +2,14 @@ import glob
 import json
 import os
 import zipfile
+import sys
+
+# 强制标准输出使用 UTF-8 编码，防止 Windows 默认 GBK 报错
+if sys.stdout.encoding.lower() != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
 
 
 def create_zip():
@@ -59,6 +67,31 @@ def create_zip():
                             zipf.write(file_path)
                             print(f"Added {file_path}")
     print(f"Successfully created {zip_name}")
+
+    # 提取并打印最新的商店发布文案
+    readme_path = "README.md"
+    if os.path.exists(readme_path):
+        try:
+            with open(readme_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            start_marker = "## 📝 详细商店发布文案 (Store Changelog)"
+            if start_marker in content:
+                print("\n" + "=" * 60)
+                print("🌟 [发现商店更新说明] 复制以下内容直接发布到谷歌商店：\n")
+
+                # 提取区块
+                text_after_marker = content.split(start_marker)[1]
+                # 去除括号里的提示
+                if ")*" in text_after_marker:
+                    text_after_marker = text_after_marker.split(")*", 1)[1]
+
+                # 读取到下一个 --- 为止
+                store_text = text_after_marker.split("---")[0].strip()
+                print(store_text)
+                print("\n" + "=" * 60 + "\n")
+        except Exception as e:
+            print(f"提取发布文案失败: {e}")
 
 
 if __name__ == "__main__":
