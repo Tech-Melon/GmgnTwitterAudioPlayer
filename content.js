@@ -1016,9 +1016,17 @@ function playShortBeep(source = 'wallet') {
         console.warn('🔔 [GMGN 盯盘伴侣] beep 播放失败:', e);
     }
 }
-window.addEventListener('GMGN_WALLET_MSG', async function (e) {
-    if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
-    const item = e.detail;
+async function handleWalletMsg(e) {
+    // 1. 前置拦截：精准判断扩展上下文是否已丢失
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+        console.warn("👻 [GMGN 盯盘伴侣] 扩展已更新，旧上下文失效，正在清理遗留钱包监听器。");
+        window.removeEventListener('GMGN_WALLET_MSG', handleWalletMsg);
+        return;
+    }
+
+    try {
+        if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
+        const item = e.detail;
     if (!item || !item.m || !item.bs) return; // 'm' is maker, 'bs' is token symbol
     
     const maker = item.m.toLowerCase();
@@ -1298,4 +1306,13 @@ window.addEventListener('GMGN_WALLET_MSG', async function (e) {
         const iter = userAddrCooldown.keys();
         for (let i = 0; i < 250; i++) userAddrCooldown.delete(iter.next().value);
     }
-});
+    } catch (error) {
+        if (error instanceof Error && error.message.includes('Extension context invalidated')) {
+            window.removeEventListener('GMGN_WALLET_MSG', handleWalletMsg);
+        } else {
+            console.error("[GMGN 盯盘伴侣] 钱包播放异常捕获:", error);
+        }
+    }
+}
+
+window.addEventListener('GMGN_WALLET_MSG', handleWalletMsg);

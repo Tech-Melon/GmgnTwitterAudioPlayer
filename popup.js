@@ -149,6 +149,13 @@ document.addEventListener('DOMContentLoaded', () => {
         importWalletDictBtn: document.getElementById('importWalletDictBtn'),
         clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
         walletDictStatus: document.getElementById('walletDictStatus'),
+        walletSearchInput: document.getElementById('walletSearchInput'),
+        walletList: document.getElementById('walletList'),
+        walletEditModal: document.getElementById('walletEditModal'),
+        editWalletAddress: document.getElementById('editWalletAddress'),
+        editWalletName: document.getElementById('editWalletName'),
+        cancelWalletEditBtn: document.getElementById('cancelWalletEditBtn'),
+        saveWalletEditBtn: document.getElementById('saveWalletEditBtn'),
         customWalletName: document.getElementById('customWalletName'),
         customWalletAddress: document.getElementById('customWalletAddress'),
         addCustomWalletBtn: document.getElementById('addCustomWalletBtn')
@@ -330,6 +337,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const walletDictionary = result.walletDictionary || {};
             els.walletDictStatus.textContent = `已导入: ${Object.keys(walletDictionary).length} 个地址`;
+
+            els.walletList.innerHTML = '';
+            Object.entries(walletDictionary).forEach(([address, info]) => {
+                const div = document.createElement('div');
+                div.className = 'list-item';
+                div.innerHTML = `
+                    <div class="item-info">
+                        <span class="item-title" title="${escapeHTML(info.rename)}">${escapeHTML(info.rename)}</span>
+                        <span class="item-sub">${escapeHTML(address)}</span>
+                    </div>
+                    <div class="action-btns">
+                        <button class="btn-icon edit" data-addr="${escapeHTML(address)}" data-name="${escapeHTML(info.rename)}">编辑</button>
+                        <button class="btn-icon del" data-addr="${escapeHTML(address)}">删除</button>
+                    </div>
+                `;
+
+                div.querySelector('.edit').addEventListener('click', (e) => {
+                    els.editWalletAddress.value = e.target.dataset.addr;
+                    els.editWalletName.value = e.target.dataset.name;
+                    els.walletEditModal.style.display = 'flex';
+                });
+
+                div.querySelector('.del').addEventListener('click', (e) => {
+                    const addr = e.target.dataset.addr;
+                    chrome.storage.local.get(['walletDictionary'], (res) => {
+                        const dict = res.walletDictionary || {};
+                        delete dict[addr];
+                        chrome.storage.local.set({ walletDictionary: dict }, () => {
+                            showToast('已删除该钱包');
+                            loadData();
+                        });
+                    });
+                });
+
+                els.walletList.appendChild(div);
+            });
 
             // 🌟 渲染音频列表给自定义下拉框
             const defaultOptions = [
@@ -711,6 +754,36 @@ document.addEventListener('DOMContentLoaded', () => {
         els.rulesList.querySelectorAll('.list-item').forEach(item => {
             const textContent = item.querySelector('.item-info').textContent.toLowerCase();
             item.style.display = textContent.includes(searchTerm) ? 'flex' : 'none';
+        });
+    });
+
+    els.walletSearchInput.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.trim().toLowerCase();
+        els.walletList.querySelectorAll('.list-item').forEach(item => {
+            const textContent = item.querySelector('.item-info').textContent.toLowerCase();
+            item.style.display = textContent.includes(searchTerm) ? 'flex' : 'none';
+        });
+    });
+
+    els.cancelWalletEditBtn.addEventListener('click', () => {
+        els.walletEditModal.style.display = 'none';
+    });
+
+    els.saveWalletEditBtn.addEventListener('click', () => {
+        const addr = els.editWalletAddress.value.trim().toLowerCase();
+        const rename = els.editWalletName.value.trim();
+        if (!rename) return showToast('备注不能为空');
+        
+        chrome.storage.local.get(['walletDictionary'], (res) => {
+            const dict = res.walletDictionary || {};
+            if (dict[addr]) {
+                dict[addr].rename = rename;
+                chrome.storage.local.set({ walletDictionary: dict }, () => {
+                    showToast('钱包备注已更新');
+                    els.walletEditModal.style.display = 'none';
+                    loadData();
+                });
+            }
         });
     });
 

@@ -755,6 +755,8 @@
                 <button id="clearWalletDictBtn" class="outline" style="color: #ff3b30; border-color: #ff3b30;">清空</button>
             </div>
             <div id="walletDictStatus" style="font-size: 12px; color: var(--text-sec); margin-top: 8px;">已导入: 0 个地址</div>
+            <input type="text" id="walletSearchInput" placeholder="🔍 搜索钱包地址或备注..." style="margin-top: 12px; background: #f2f2f7; border: none; padding: 8px 12px; border-radius: 8px; font-size: 13px; width: 100%; box-sizing: border-box;">
+            <div id="walletList" class="list-container" style="margin-top: 8px; max-height: 200px;"></div>
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #d2d2d7;">
                 <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 6px;">手动添加单地址 <i style="color: #ff9500; font-size: 11px;">(注: 需在GMGN页面关注该钱包)</i></span>
                 <div style="display: flex; gap: 6px; margin-bottom: 6px;">
@@ -887,6 +889,20 @@
             </div>
         </div>
     </div>
+
+    <!-- 钱包编辑弹窗 -->
+    <div class="modal-overlay" id="walletEditModal">
+        <div class="modal">
+            <h3>编辑钱包备注</h3>
+            <input type="text" id="editWalletAddress" readonly style="background:#f5f5f7; color:var(--text-sec); margin-bottom: 8px; width: 100%; padding: 10px; border: 1px solid #d2d2d7; border-radius: 8px; box-sizing: border-box; font-size: 12px;">
+            <input type="text" id="editWalletName" placeholder="钱包备注" style="width: 100%; padding: 10px; border: 1px solid #d2d2d7; border-radius: 8px; box-sizing: border-box; font-size: 14px;">
+            <div class="modal-actions">
+                <button id="cancelWalletEditBtn" class="outline">取消</button>
+                <button id="saveWalletEditBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script src="lib/jszip.min.js"></script>
     <script src="popup.js"></script>
 </body>
