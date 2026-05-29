@@ -419,7 +419,7 @@ function _extractTwitterNames(triggers) {
         }
         names.push(name);
     });
-    return names;
+    return names.sort(); // 🔤 排序确保 cacheKey 与到达顺序无关（A→B vs B→A 同 key）
 }
 
 /** 从钱包 items 中生成 TTS 预热文本（匹配 playWalletDirectly 的最终播报格式） */
@@ -465,7 +465,7 @@ function _buildWalletPrefetchTexts(items) {
     });
 
     const phrases = Object.values(groups).map(g => {
-        const namesStr = g.names.join('、');
+        const namesStr = g.names.sort().join('、'); // 🔤 排序确保 cacheKey 一致
         let actionStr = '买入';
         if (g.groupAction === 'sellProcessed') actionStr = '卖出';
         if (g.groupAction === 'sellReduce') actionStr = '减仓';
@@ -1354,7 +1354,7 @@ function playTwitterDirectly(triggers, fingerprints) {
             }
             if (!overloadNames.includes(speakerName)) overloadNames.push(speakerName);
         });
-        playNetworkTTS(`${overloadNames.join('、')}一起发推啦`, 'twitter', onComplete);
+        playNetworkTTS(`${overloadNames.sort().join('、')}一起发推啦`, 'twitter', onComplete);
         fingerprints.forEach(fp => markEventPlayed(fp));
         return;
     }
@@ -1435,12 +1435,12 @@ function playTwitterDirectly(triggers, fingerprints) {
 
         // 1️⃣ 优先合并连读 VIP 账号 of TTS 人声
         if (vipTtsNames.length > 0) {
-            const mergedNames = vipTtsNames.join('、');
+            const mergedNames = vipTtsNames.sort().join('、');
             playNetworkTTS(`${mergedNames} 发推啦`, 'twitter', onComplete);
         }
         // 2️⃣ 其次合并连读普通未映射账号 of TTS 人声
         else if (unmappedTtsNames.length > 0) {
-            const mergedNames = unmappedTtsNames.join('、');
+            const mergedNames = unmappedTtsNames.sort().join('、');
             playNetworkTTS(`${mergedNames} 发推啦`, 'twitter', onComplete);
         }
         // 3️⃣ 播放专属定制/自定义铃声 (并发时最新打断)
@@ -1606,7 +1606,7 @@ function playWalletDirectly(list) {
             }
         });
         const overloadPhrases = Object.values(overloadGroups).map(g => {
-            const namesStr = g.names.join('、');
+            const namesStr = g.names.sort().join('、'); // 🔤 排序确保 cacheKey 一致
             let actionStr = '买入';
             if (g.groupAction === 'sellProcessed') actionStr = '卖出';
             if (g.groupAction === 'sellReduce') actionStr = '减仓';
@@ -1675,7 +1675,7 @@ function playWalletDirectly(list) {
     const groupKeys = Object.keys(groups);
     groupKeys.forEach(key => {
         const g = groups[key];
-        const namesStr = g.names.join('、');
+        const namesStr = g.names.sort().join('、'); // 🔤 排序确保 cacheKey 一致
 
         let actionStr = '买入';
         if (g.groupAction === 'sellProcessed') actionStr = '卖出';
