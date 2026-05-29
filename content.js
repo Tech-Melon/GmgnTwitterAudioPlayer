@@ -131,9 +131,14 @@ setTimeout(() => {
 // 部署教程参考：https://github.com/DIYgod/cloudflare-edge-tts
 const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev";
 
-// 🌟 极速双缓存引擎：IndexedDB 本地持久化（带连接健康检查 + 超时保护）
+// 🌟 极速双缓存引擎：IndexedDB 本地持久化（带连接健康检查 + 超时保护 + 自动清理）
 const idb = {
     db: null,
+    _setCount: 0,            // set 调用计数器
+    MAX_ENTRIES: 1000,       // 最大缓存条目数
+    CLEANUP_TARGET: 700,     // 清理后保留条目数（一次清理 300 条）
+    CHECK_INTERVAL: 50,      // 每 50 次 set 检查一次容量
+
     async init() {
         if (this.db) {
             try {
@@ -146,8 +151,19 @@ const idb = {
             }
         }
         return new Promise((resolve, reject) => {
-            const req = indexedDB.open('GMGNTTSCache', 1);
-            req.onupgradeneeded = (e) => e.target.result.createObjectStore('audio', { keyPath: 'text' });
+            const req = indexedDB.open('GMGNTTSCache', 2); // v2: 添加 ts 索引用于 LRU 清理
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                let store;
+                if (!db.objectStoreNames.contains('audio')) {
+                    store = db.createObjectStore('audio', { keyPath: 'text' });
+                } else {
+                    store = e.target.transaction.objectStore('audio');
+                }
+                if (!store.indexNames.contains('ts')) {
+                    store.createIndex('ts', 'ts', { unique: false });
+                }
+            };
             req.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
             req.onerror = () => reject(req.error);
         });
@@ -183,6 +199,56 @@ const idb = {
         } catch (e) {
             console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 写入失败，跳过缓存:", e.message);
             this.db = null;
+        }
+        // 🧹 定期检查容量并批量清理最旧缓存
+        this._setCount++;
+        if (this._setCount % this.CHECK_INTERVAL === 0) {
+            this._maybeCleanup();
+        }
+    },
+    /** 🧹 检查缓存条目数，超过上限则批量清理最旧的 */
+    async _maybeCleanup() {
+        try {
+            await this.init();
+            const count = await new Promise((resolve, reject) => {
+                const req = this.db.transaction('audio', 'readonly').objectStore('audio').count();
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            if (count > this.MAX_ENTRIES) {
+                const deleteCount = count - this.CLEANUP_TARGET;
+                console.log(`🧹 [GMGN 盯盘伴侣 - IDB] 缓存超限 (${count}/${this.MAX_ENTRIES})，清理 ${deleteCount} 条最旧缓存`);
+                await this._doCleanup(deleteCount);
+            }
+        } catch (e) {
+            console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 容量检查失败:", e.message);
+        }
+    },
+    /** 🧹 按 ts 索引升序（最旧优先）删除 deleteCount 条缓存 */
+    async _doCleanup(deleteCount) {
+        try {
+            await this.init();
+            return new Promise((resolve) => {
+                const tx = this.db.transaction('audio', 'readwrite');
+                const store = tx.objectStore('audio');
+                const index = store.index('ts');
+                let deleted = 0;
+                const cursorReq = index.openCursor();
+                cursorReq.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor && deleted < deleteCount) {
+                        cursor.delete();
+                        deleted++;
+                        cursor.continue();
+                    } else {
+                        console.log(`🧹 [GMGN 盯盘伴侣 - IDB] 已清理 ${deleted} 条旧缓存`);
+                        resolve();
+                    }
+                };
+                cursorReq.onerror = () => resolve();
+            });
+        } catch (e) {
+            console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 缓存清理失败:", e.message);
         }
     }
 };
@@ -299,37 +365,289 @@ function interruptCurrentAudio() {
 }
 
 // ════════════════════════════════════════════════════════════
+// 🔥 TTS 异步预热引擎 — 入队即预请求，播放时 IDB 直接命中
+// ════════════════════════════════════════════════════════════
+
+/** 🔥 异步预热 TTS 文本到 IDB 缓存（fire-and-forget，不播放） */
+function prefetchTTSToCache(textOrItems, source = 'twitter') {
+    const items = Array.isArray(textOrItems) ? textOrItems : [textOrItems];
+    if (items.length === 0 || !items[0]) return;
+
+    const ttsConfig = source === 'wallet' ? (configCache.walletTts || {}) : (configCache.twitterTts || {});
+    const voice = ttsConfig.voice || 'zh-CN-XiaoxiaoNeural';
+    const rate = ttsConfig.rate || '+0%';
+    const pitch = ttsConfig.pitch || '+0%';
+
+    // 并行预热所有片段（fire-and-forget，不阻塞主流程）
+    Promise.all(items.map(async (text) => {
+        try {
+            const cacheKey = `${text}_${voice}_${rate}_${pitch}`;
+            const cached = await idb.get(cacheKey);
+            if (cached) return; // 已缓存，跳过
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const res = await fetch(`${CF_TTS_API}/tts`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice, rate, pitch }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (!res.ok) return;
+            const blob = await res.blob();
+            await idb.set(cacheKey, blob);
+            console.log(`🔥 [GMGN 盯盘伴侣 - 预热] TTS 缓存已预热: "${text}"`);
+        } catch (e) {
+            // 预热失败静默忽略，playNetworkTTS 会自行请求
+        }
+    })).catch(() => {});
+}
+
+/** 从推特 triggers 中提取去重后的博主名（优先 remark 备注名） */
+function _extractTwitterNames(triggers) {
+    const seen = new Set();
+    const names = [];
+    triggers.forEach(t => {
+        if (!t || typeof t.id !== 'string') return;
+        const twitterId = t.id.trim().toLowerCase();
+        if (seen.has(twitterId)) return;
+        seen.add(twitterId);
+        const rule = configCache.mappings ? configCache.mappings[twitterId] : null;
+        let name = t.name || twitterId;
+        if (typeof rule === 'object' && rule !== null && rule.remark) {
+            name = rule.remark;
+        }
+        names.push(name);
+    });
+    return names;
+}
+
+/** 从钱包 items 中生成 TTS 预热文本（匹配 playWalletDirectly 的最终播报格式） */
+function _buildWalletPrefetchTexts(items) {
+    // 先去重
+    const seen = new Set();
+    const deduped = items.filter(t => {
+        if (!t) return false;
+        const key = `${t.rename}_${t.action}_${t.tokenSymbol}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+    if (deduped.length === 0) return [];
+
+    // 单笔：用分段格式（匹配 playWalletDirectly 单笔分支）
+    if (deduped.length === 1) {
+        const t = deduped[0];
+        if (t.action === 'buy') {
+            return [`${t.rename}买入`, t.tokenSymbol];
+        } else {
+            const isClearAll = t.ooc === 1;
+            const actionText = isClearAll ? '清仓' : '减仓';
+            if (t.cnt === 'processed') return [t.rename];
+            if (t.cnt === 'confirm') return [`${actionText}${t.tokenSymbol}`];
+            return [`${t.rename}${actionText}`, t.tokenSymbol];
+        }
+    }
+
+    // 多笔：用合并格式（匹配 playWalletDirectly 多笔分支的 mergedTexts.join('，同时')）
+    const groups = {};
+    deduped.forEach(t => {
+        const isClearAll = t.ooc === 1;
+        let groupAction = t.action;
+        let symbol = t.tokenSymbol;
+        if (t.action === 'sell') {
+            if (t.cnt === 'processed') { groupAction = 'sellProcessed'; symbol = ''; }
+            else { groupAction = isClearAll ? 'sellClear' : 'sellReduce'; }
+        }
+        const key = `${groupAction}_${symbol}`;
+        if (!groups[key]) groups[key] = { groupAction, tokenSymbol: symbol, names: [] };
+        if (!groups[key].names.includes(t.rename)) groups[key].names.push(t.rename);
+    });
+
+    const phrases = Object.values(groups).map(g => {
+        const namesStr = g.names.join('、');
+        let actionStr = '买入';
+        if (g.groupAction === 'sellProcessed') actionStr = '卖出';
+        if (g.groupAction === 'sellReduce') actionStr = '减仓';
+        if (g.groupAction === 'sellClear') actionStr = '清仓';
+        return g.groupAction === 'sellProcessed'
+            ? `${namesStr}${actionStr}`
+            : `${namesStr}${actionStr}${g.tokenSymbol}`;
+    });
+    return [phrases.join('，同时')];
+}
+
+// ════════════════════════════════════════════════════════════
 // 👑 首发 0 延时 + 动态批处理合并调度引擎 (Zero-Delay Dynamic Batching)
+//    🔥 排队期间异步预热 TTS → 前面播完后 IDB 直接命中 → 0 延迟播放
+//    🔒 凑够 3 个不同信号源锁定为一批 → 后续新来的进入新批次
 // ════════════════════════════════════════════════════════════
 const TwitterBatch = {
-    pendingTriggers: [],
-    fingerprints: new Set(),
+    lockedBatches: [],          // 已锁定的批次队列 [{triggers, fingerprints}]
+    pendingTriggers: [],        // 未锁定的 pending triggers
+    pendingFingerprints: new Set(),
+    _pendingDeduped: new Set(), // 去重计数：不同 twitterId 数量
+
     add(triggers, fingerprint) {
         const now = Date.now();
         triggers.forEach(t => {
             if (t && typeof t.id === 'string') {
-                t._queuedAt = now; // 👑 动态挂载排队时间戳，实现旧消息 TTL 智能过滤
+                t._queuedAt = now;
                 this.pendingTriggers.push(t);
+                this._pendingDeduped.add(t.id.trim().toLowerCase());
             }
         });
-        if (fingerprint) this.fingerprints.add(fingerprint);
+        if (fingerprint) this.pendingFingerprints.add(fingerprint);
+
+        // 🔒 凑够 3 个不同博主 → 锁定为一批（可能一次 add 传入多个触发多次锁定）
+        while (this._pendingDeduped.size >= 3) {
+            this._lockCurrentBatch();
+        }
+        // 🔥 不管是否锁定，都预热当前 pending 的 TTS 文本
+        this._prefetchCurrentPending();
     },
+
+    /** 🔒 取前 3 个不同博主的 triggers 锁定为一批 */
+    _lockCurrentBatch() {
+        const batchIds = new Set();
+        const batchTriggers = [];
+        const remainingTriggers = [];
+
+        this.pendingTriggers.forEach(t => {
+            const twitterId = t.id.trim().toLowerCase();
+            if (batchIds.size < 3 || batchIds.has(twitterId)) {
+                batchIds.add(twitterId);
+                batchTriggers.push(t);
+            } else {
+                remainingTriggers.push(t);
+            }
+        });
+
+        // 🔥 预热锁定批次的最终合并 TTS
+        const names = _extractTwitterNames(batchTriggers);
+        if (names.length > 0) {
+            prefetchTTSToCache(`${names.join('、')}一起发推啦`, 'twitter');
+        }
+
+        this.lockedBatches.push({
+            triggers: batchTriggers,
+            fingerprints: new Set(this.pendingFingerprints),
+        });
+
+        // 剩余的留在 pending 继续积累
+        this.pendingTriggers = remainingTriggers;
+        this.pendingFingerprints.clear();
+        this._pendingDeduped.clear();
+        remainingTriggers.forEach(t => this._pendingDeduped.add(t.id.trim().toLowerCase()));
+    },
+
+    /** 🔥 预热当前未锁定 pending 的 TTS 文本 */
+    _prefetchCurrentPending() {
+        if (this.pendingTriggers.length === 0) return;
+        const names = _extractTwitterNames(this.pendingTriggers);
+        if (names.length === 0) return;
+        const text = names.length >= 3
+            ? `${names.join('、')}一起发推啦`
+            : `${names.join('、')} 发推啦`;
+        prefetchTTSToCache(text, 'twitter');
+    },
+
+    hasContent() {
+        return this.lockedBatches.length > 0 || this.pendingTriggers.length > 0;
+    },
+
+    /** 取出下一批：优先锁定批次，其次未锁定 pending */
+    takeNext() {
+        if (this.lockedBatches.length > 0) return this.lockedBatches.shift();
+        if (this.pendingTriggers.length > 0) {
+            const batch = {
+                triggers: [...this.pendingTriggers],
+                fingerprints: new Set(this.pendingFingerprints),
+            };
+            this.clear();
+            return batch;
+        }
+        return null;
+    },
+
     clear() {
         this.pendingTriggers = [];
-        this.fingerprints.clear();
+        this.pendingFingerprints.clear();
+        this._pendingDeduped.clear();
     }
 };
 
 const WalletBatch = {
-    pendingItems: [],
+    lockedBatches: [],          // 已锁定的批次队列 [{items}]
+    pendingItems: [],           // 未锁定的 pending items
+    _pendingDeduped: new Set(), // 去重计数：不同 rename_action_tokenSymbol
+
     add(itemData) {
         if (itemData) {
-            itemData._queuedAt = Date.now(); // 👑 动态挂载排队时间戳，实现旧消息 TTL 智能过滤
+            itemData._queuedAt = Date.now();
+            this.pendingItems.push(itemData);
+            this._pendingDeduped.add(`${itemData.rename}_${itemData.action}_${itemData.tokenSymbol}`);
         }
-        this.pendingItems.push(itemData);
+
+        // 🔒 凑够 3 个不同交易事件 → 锁定为一批
+        while (this._pendingDeduped.size >= 3) {
+            this._lockCurrentBatch();
+        }
+        // 🔥 预热当前 pending 的 TTS 文本
+        this._prefetchCurrentPending();
     },
+
+    /** 🔒 取前 3 个不同交易事件锁定为一批 */
+    _lockCurrentBatch() {
+        const batchKeys = new Set();
+        const batchItems = [];
+        const remainingItems = [];
+
+        this.pendingItems.forEach(t => {
+            const key = `${t.rename}_${t.action}_${t.tokenSymbol}`;
+            if (batchKeys.size < 3 || batchKeys.has(key)) {
+                batchKeys.add(key);
+                batchItems.push(t);
+            } else {
+                remainingItems.push(t);
+            }
+        });
+
+        // 🔥 预热锁定批次的最终 TTS
+        const texts = _buildWalletPrefetchTexts(batchItems);
+        prefetchTTSToCache(texts, 'wallet');
+
+        this.lockedBatches.push({ items: batchItems });
+
+        this.pendingItems = remainingItems;
+        this._pendingDeduped.clear();
+        remainingItems.forEach(t => this._pendingDeduped.add(`${t.rename}_${t.action}_${t.tokenSymbol}`));
+    },
+
+    /** 🔥 预热当前未锁定 pending 的 TTS 文本 */
+    _prefetchCurrentPending() {
+        if (this.pendingItems.length === 0) return;
+        const texts = _buildWalletPrefetchTexts(this.pendingItems);
+        prefetchTTSToCache(texts, 'wallet');
+    },
+
+    hasContent() {
+        return this.lockedBatches.length > 0 || this.pendingItems.length > 0;
+    },
+
+    takeNext() {
+        if (this.lockedBatches.length > 0) return this.lockedBatches.shift();
+        if (this.pendingItems.length > 0) {
+            const batch = { items: [...this.pendingItems] };
+            this.clear();
+            return batch;
+        }
+        return null;
+    },
+
     clear() {
         this.pendingItems = [];
+        this._pendingDeduped.clear();
     }
 };
 
@@ -349,31 +667,31 @@ const DynamicPlaybackScheduler = {
         }, 15000);
     },
 
-    /** 试图播报推特消息 (首发 0 延时，占线则入 Batch 缓存) */
+    /** 试图播报推特消息 (首发 0 延时，占线则入 Batch 缓存并预热 TTS) */
     triggerTwitter(triggers, fingerprint) {
         if (!this._isPlaying) {
             this._isPlaying = true;
             this._startSafetyTimer();
             playTwitterDirectly(triggers, [fingerprint]);
         } else {
-            console.log("⚡ [GMGN 盯盘伴侣 - Scheduler] 播放器占线，推特事件进入动态 Batch 缓存");
+            console.log("⚡ [GMGN 盯盘伴侣 - Scheduler] 播放器占线，推特事件进入 Batch（🔥 TTS 预热中）");
             TwitterBatch.add(triggers, fingerprint);
         }
     },
 
-    /** 试图播报钱包消息 (首发 0 延时，占线则入 Batch 缓存) */
+    /** 试图播报钱包消息 (首发 0 延时，占线则入 Batch 缓存并预热 TTS) */
     triggerWallet(itemData) {
         if (!this._isPlaying) {
             this._isPlaying = true;
             this._startSafetyTimer();
             playWalletDirectly([itemData]);
         } else {
-            console.log("⚡ [GMGN 盯盘伴侣 - Scheduler] 播放器占线，钱包事件进入动态 Batch 缓存");
+            console.log("⚡ [GMGN 盯盘伴侣 - Scheduler] 播放器占线，钱包事件进入 Batch（🔥 TTS 预热中）");
             WalletBatch.add(itemData);
         }
     },
 
-    /** 当前音频播放完毕，解锁并调度下一批 Batch 批处理合并播放 */
+    /** 当前音频播放完毕，解锁并调度下一批（优先锁定批次 → 其次 pending） */
     releaseAndNext() {
         this._isPlaying = false;
         if (this._safetyTimer) {
@@ -381,20 +699,17 @@ const DynamicPlaybackScheduler = {
             this._safetyTimer = null;
         }
 
-        if (TwitterBatch.pendingTriggers.length > 0) {
+        if (TwitterBatch.hasContent()) {
             this._isPlaying = true;
             this._startSafetyTimer();
-            const triggers = Array.from(TwitterBatch.pendingTriggers);
-            const fingerprints = Array.from(TwitterBatch.fingerprints);
-            TwitterBatch.clear();
-            playTwitterDirectly(triggers, fingerprints);
+            const batch = TwitterBatch.takeNext();
+            playTwitterDirectly(batch.triggers, Array.from(batch.fingerprints));
         } 
-        else if (WalletBatch.pendingItems.length > 0) {
+        else if (WalletBatch.hasContent()) {
             this._isPlaying = true;
             this._startSafetyTimer();
-            const items = Array.from(WalletBatch.pendingItems);
-            WalletBatch.clear();
-            playWalletDirectly(items);
+            const batch = WalletBatch.takeNext();
+            playWalletDirectly(batch.items);
         }
     }
 };
