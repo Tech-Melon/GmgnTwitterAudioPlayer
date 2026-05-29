@@ -135,9 +135,9 @@ const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev";
 const idb = {
     db: null,
     _setCount: 0,            // set 调用计数器
-    MAX_ENTRIES: 1000,       // 最大缓存条目数
-    CLEANUP_TARGET: 700,     // 清理后保留条目数（一次清理 300 条）
-    CHECK_INTERVAL: 50,      // 每 50 次 set 检查一次容量
+    MAX_ENTRIES: 3000,       // 最大缓存条目数（~90MB，电脑轻松应对）
+    CLEANUP_TARGET: 2000,    // 清理后保留条目数（一次清理 1000 条）
+    CHECK_INTERVAL: 100,     // 每 100 次 set 检查一次容量
 
     async init() {
         if (this.db) {
