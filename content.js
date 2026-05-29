@@ -335,11 +335,25 @@ const WalletBatch = {
 
 const DynamicPlaybackScheduler = {
     _isPlaying: false,
+    _safetyTimer: null,
+
+    /** 🛡️ 启动超时兜底计时器：防止 onComplete 因异常路径未被调用导致调度器永久卡死 */
+    _startSafetyTimer() {
+        if (this._safetyTimer) clearTimeout(this._safetyTimer);
+        this._safetyTimer = setTimeout(() => {
+            if (this._isPlaying) {
+                console.warn("⚠️ [GMGN 盯盘伴侣 - Scheduler] 检测到播放器超时卡死 (15s)，强制释放");
+                this._isPlaying = false;
+                this.releaseAndNext();
+            }
+        }, 15000);
+    },
 
     /** 试图播报推特消息 (首发 0 延时，占线则入 Batch 缓存) */
     triggerTwitter(triggers, fingerprint) {
         if (!this._isPlaying) {
             this._isPlaying = true;
+            this._startSafetyTimer();
             playTwitterDirectly(triggers, [fingerprint]);
         } else {
             console.log("⚡ [GMGN 盯盘伴侣 - Scheduler] 播放器占线，推特事件进入动态 Batch 缓存");
@@ -351,6 +365,7 @@ const DynamicPlaybackScheduler = {
     triggerWallet(itemData) {
         if (!this._isPlaying) {
             this._isPlaying = true;
+            this._startSafetyTimer();
             playWalletDirectly([itemData]);
         } else {
             console.log("⚡ [GMGN 盯盘伴侣 - Scheduler] 播放器占线，钱包事件进入动态 Batch 缓存");
@@ -361,9 +376,14 @@ const DynamicPlaybackScheduler = {
     /** 当前音频播放完毕，解锁并调度下一批 Batch 批处理合并播放 */
     releaseAndNext() {
         this._isPlaying = false;
+        if (this._safetyTimer) {
+            clearTimeout(this._safetyTimer);
+            this._safetyTimer = null;
+        }
 
         if (TwitterBatch.pendingTriggers.length > 0) {
             this._isPlaying = true;
+            this._startSafetyTimer();
             const triggers = Array.from(TwitterBatch.pendingTriggers);
             const fingerprints = Array.from(TwitterBatch.fingerprints);
             TwitterBatch.clear();
@@ -371,6 +391,7 @@ const DynamicPlaybackScheduler = {
         } 
         else if (WalletBatch.pendingItems.length > 0) {
             this._isPlaying = true;
+            this._startSafetyTimer();
             const items = Array.from(WalletBatch.pendingItems);
             WalletBatch.clear();
             playWalletDirectly(items);
@@ -827,7 +848,7 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
             // 如果在异步段回调中被新来的消息打断，则立刻退出，不再继续播下一段
             if (currentActivePlayer !== player) {
                 blobUrls.forEach(u => URL.revokeObjectURL(u));
-                if (onComplete) onComplete();
+                // 🛡️ 被打断时不调 onComplete — 打断方已接管调度权，防止 releaseAndNext 双重触发
                 return;
             }
 
@@ -856,9 +877,10 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
             player.onerror = () => {
                 blobUrls.forEach(u => URL.revokeObjectURL(u));
                 player.__blobUrls = null;
-                if (currentActivePlayer === player) currentActivePlayer = null;
+                const isOwner = currentActivePlayer === player;
+                if (isOwner) currentActivePlayer = null;
                 AudioPool.release(player);
-                if (onComplete) onComplete();
+                if (isOwner && onComplete) onComplete(); // 🛡️ 仅 owner 驱动调度
             };
 
             player.play().catch(e => {
@@ -867,9 +889,10 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
                 }
                 blobUrls.forEach(u => URL.revokeObjectURL(u));
                 player.__blobUrls = null;
-                if (currentActivePlayer === player) currentActivePlayer = null;
+                const isOwner = currentActivePlayer === player;
+                if (isOwner) currentActivePlayer = null;
                 AudioPool.release(player);
-                if (onComplete) onComplete();
+                if (isOwner && onComplete) onComplete(); // 🛡️ 仅 owner 驱动调度
             });
         };
 
@@ -912,15 +935,18 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
         applyGainToAudio(player, targetVolume);
 
         player.onended = () => {
-            if (currentActivePlayer === player) currentActivePlayer = null;
+            const isOwner = currentActivePlayer === player;
+            if (isOwner) currentActivePlayer = null;
             AudioPool.release(player);
-            if (onComplete) onComplete();
+            if (isOwner && onComplete) onComplete(); // 🛡️ 仅 owner 驱动调度
         };
 
         player.onerror = (e) => {
             console.warn("⚠️ [GMGN 盯盘伴侣] 音频播放错误:", e);
-            if (currentActivePlayer === player) currentActivePlayer = null;
+            const isOwner = currentActivePlayer === player;
+            if (isOwner) currentActivePlayer = null;
             AudioPool.release(player);
+            if (!isOwner) return; // 🛡️ 被打断后不驱动调度
             if (ttsFallbackText) {
                 playNetworkTTS(ttsFallbackText, source, onComplete);
             } else {
@@ -932,8 +958,10 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
             if (e.name !== 'NotAllowedError') {
                 console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", { error: e.name, message: e.message });
             }
-            if (currentActivePlayer === player) currentActivePlayer = null;
+            const isOwner = currentActivePlayer === player;
+            if (isOwner) currentActivePlayer = null;
             AudioPool.release(player);
+            if (!isOwner) return; // 🛡️ 被打断后不驱动调度
             if (ttsFallbackText) {
                 playNetworkTTS(ttsFallbackText, source, onComplete);
             } else {
@@ -975,10 +1003,43 @@ function playTwitterDirectly(triggers, fingerprints) {
         return;
     }
 
-    // 👑 2. 超载防轰炸智能压缩：如果有效积压推特触发项 > 3，直接概括，斩断雪崩延迟
-    if (validTriggers.length > 3) {
-        console.warn(`🚨 [GMGN 盯盘伴侣] 推特积压超载 (${validTriggers.length} 条)，启动弹性概括播报`);
-        playNetworkTTS("多位监控账号密集发推", 'twitter', onComplete);
+    // 👑 2. 同博主去重：同一个 twitterId 的多条推文合并为一条（防止同一人连发多条被误判为多人发推）
+    const seenTwitterIds = new Set();
+    const dedupedTriggers = validTriggers.filter(t => {
+        if (!t || typeof t.id !== 'string') return false;
+        const twitterId = t.id.trim().toLowerCase();
+        if (seenTwitterIds.has(twitterId)) return false;
+        seenTwitterIds.add(twitterId);
+        return true;
+    });
+    if (dedupedTriggers.length < validTriggers.length) {
+        console.log(`🔄 [GMGN 盯盘伴侣] 同博主去重：${validTriggers.length} 条 → ${dedupedTriggers.length} 条（${validTriggers.length - dedupedTriggers.length} 条重复已合并）`);
+    }
+
+    // 👑 3. 超载截断分批：超过 5 条时截取前 5 条本轮播报，剩余放回 Batch 下一轮自动消费
+    const TWITTER_MAX_BATCH = 5;
+    let currentTriggers = dedupedTriggers;
+    if (dedupedTriggers.length > TWITTER_MAX_BATCH) {
+        currentTriggers = dedupedTriggers.slice(0, TWITTER_MAX_BATCH);
+        const remaining = dedupedTriggers.slice(TWITTER_MAX_BATCH);
+        console.log(`✂️ [GMGN 盯盘伴侣] 推特截断分批：本轮 ${currentTriggers.length} 条，剩余 ${remaining.length} 条放回队列`);
+        TwitterBatch.add(remaining, null);
+    }
+
+    // 👑 4. 超载概括播报：去重后仍超过 3 位不同博主，精确列出人名概括
+    if (currentTriggers.length > 3) {
+        console.warn(`🚨 [GMGN 盯盘伴侣] 推特积压超载 (${currentTriggers.length} 位不同博主)，启动弹性概括播报`);
+        const overloadNames = [];
+        currentTriggers.forEach(t => {
+            const twitterId = t.id.trim().toLowerCase();
+            const rule = configCache.mappings[twitterId];
+            let speakerName = t.name || twitterId;
+            if (typeof rule === 'object' && rule !== null && rule.remark) {
+                speakerName = rule.remark;
+            }
+            if (!overloadNames.includes(speakerName)) overloadNames.push(speakerName);
+        });
+        playNetworkTTS(`${overloadNames.join('、')}一起发推啦`, 'twitter', onComplete);
         fingerprints.forEach(fp => markEventPlayed(fp));
         return;
     }
@@ -989,7 +1050,7 @@ function playTwitterDirectly(triggers, fingerprints) {
     let needsUnmappedDefaultAudio = false;
     let vipFallbackDefault = false;
 
-    validTriggers.forEach(trigger => {
+    currentTriggers.forEach(trigger => {
         if (!trigger || typeof trigger.id !== 'string') return;
 
         const twitterId = trigger.id.trim().toLowerCase();
@@ -1153,6 +1214,7 @@ function playShortBeep(source = 'wallet') {
     if (!_autoplayUnlocked) return;
     try {
         const ctx = sharedAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (ctx.state === 'suspended') ctx.resume(); // 🛡️ 防止 suspended 状态静默失败
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         const vol = source === 'wallet' ? (configCache.walletVolume || 1.0) : (configCache.twitterVolume || 1.0);
@@ -1182,17 +1244,70 @@ function playWalletDirectly(list) {
         return;
     }
 
-    // 👑 2. 超载防轰炸智能压缩：如果有效积压钱包交易 > 3 笔，直接概括，斩断雪崩延迟
-    if (validItems.length > 3) {
-        console.warn(`🚨 [GMGN 盯盘伴侣] 钱包消息积压超载 (${validItems.length} 笔)，启动弹性概括播报`);
-        playNetworkTTS("多钱包高频密集异动", 'wallet', onComplete);
+    // 👑 2. 同钱包去重：同一个钱包对同一代币的同方向操作合并为一条（防止拆单/连击被误判为多人异动）
+    const seenWalletKeys = new Set();
+    const dedupedItems = validItems.filter(t => {
+        const dedupKey = `${t.rename}_${t.action}_${t.tokenSymbol}`;
+        if (seenWalletKeys.has(dedupKey)) return false;
+        seenWalletKeys.add(dedupKey);
+        return true;
+    });
+    if (dedupedItems.length < validItems.length) {
+        console.log(`🔄 [GMGN 盯盘伴侣] 同钱包去重：${validItems.length} 笔 → ${dedupedItems.length} 笔（${validItems.length - dedupedItems.length} 笔重复已合并）`);
+    }
+
+    // 👑 3. 超载截断分批：超过 5 笔时截取前 5 笔本轮播报，剩余放回 Batch 下一轮自动消费
+    const WALLET_MAX_BATCH = 5;
+    let currentItems = dedupedItems;
+    if (dedupedItems.length > WALLET_MAX_BATCH) {
+        currentItems = dedupedItems.slice(0, WALLET_MAX_BATCH);
+        const remaining = dedupedItems.slice(WALLET_MAX_BATCH);
+        console.log(`✂️ [GMGN 盯盘伴侣] 钱包截断分批：本轮 ${currentItems.length} 笔，剩余 ${remaining.length} 笔放回队列`);
+        remaining.forEach(item => WalletBatch.add(item));
+    }
+
+    // 👑 4. 超载概括播报：去重后仍超过 3 笔不同交易，精确概括人名+操作
+    if (currentItems.length > 3) {
+        console.warn(`🚨 [GMGN 盯盘伴侣] 钱包消息积压超载 (${currentItems.length} 笔不同交易)，启动弹性概括播报`);
+        const overloadGroups = {};
+        currentItems.forEach(t => {
+            const isClearAll = t.ooc === 1;
+            let groupAction = t.action;
+            let symbol = t.tokenSymbol;
+            if (t.action === 'sell') {
+                if (t.cnt === 'processed') {
+                    groupAction = 'sellProcessed';
+                    symbol = '';
+                } else {
+                    groupAction = isClearAll ? 'sellClear' : 'sellReduce';
+                }
+            }
+            const key = `${groupAction}_${symbol}`;
+            if (!overloadGroups[key]) {
+                overloadGroups[key] = { groupAction, tokenSymbol: symbol, names: [] };
+            }
+            if (!overloadGroups[key].names.includes(t.rename)) {
+                overloadGroups[key].names.push(t.rename);
+            }
+        });
+        const overloadPhrases = Object.values(overloadGroups).map(g => {
+            const namesStr = g.names.join('、');
+            let actionStr = '买入';
+            if (g.groupAction === 'sellProcessed') actionStr = '卖出';
+            if (g.groupAction === 'sellReduce') actionStr = '减仓';
+            if (g.groupAction === 'sellClear') actionStr = '清仓';
+            return g.groupAction === 'sellProcessed'
+                ? `${namesStr}${actionStr}`
+                : `${namesStr}${actionStr}${g.tokenSymbol}`;
+        });
+        playNetworkTTS(overloadPhrases.join('，'), 'wallet', onComplete);
         playShortBeep('wallet');
         return;
     }
 
     // 🌟 降级处理：只有一笔待播，完美兼容原先单发逻辑
-    if (validItems.length === 1) {
-        const t = validItems[0];
+    if (currentItems.length === 1) {
+        const t = currentItems[0];
 
         if (t.action === 'buy') {
             playNetworkTTS([`${t.rename}买入`, t.tokenSymbol], 'wallet', onComplete);
@@ -1214,7 +1329,7 @@ function playWalletDirectly(list) {
     let mergedTexts = [];
     const groups = {};
 
-    validItems.forEach(t => {
+    currentItems.forEach(t => {
         const isClearAll = t.ooc === 1;
         let groupAction = t.action;
         let symbol = t.tokenSymbol;
