@@ -950,6 +950,14 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
 
 function playTwitterDirectly(triggers, fingerprints) {
     const onComplete = () => DynamicPlaybackScheduler.releaseAndNext();
+
+    // 🔒 二次校验：调度器排队期间，其他 Tab 可能已经播放了此事件
+    if (fingerprints.length > 0 && fingerprints.every(fp => wasPlayedByOtherTab(fp))) {
+        console.log("🔒 [GMGN 盯盘伴侣 - Scheduler] 推特事件已被其他 Tab 播放，跳过");
+        onComplete();
+        return;
+    }
+
     if (lastPlayTime.size > 1000) {
         let i = 0;
         for (const key of lastPlayTime.keys()) {
@@ -1113,6 +1121,8 @@ function handleTwitterMsg(e) {
     }
 
     try {
+        // 🔒 先广播指纹给其他 Tab，抢占去重窗口（先广播再入队）
+        markEventPlayed(eventFingerprint);
         // 🚀 首发消息 0 延时，占线动态批处理合并！
         DynamicPlaybackScheduler.triggerTwitter(triggers, eventFingerprint);
     } catch (error) {
@@ -1162,8 +1172,11 @@ function playWalletDirectly(list) {
     const onComplete = () => DynamicPlaybackScheduler.releaseAndNext();
     const now = Date.now();
 
+    // 🔒 二次校验：调度器排队期间，其他 Tab 可能已经播放了此事件
+    const dedupedList = list.filter(item => !item.walletFingerprint || !wasPlayedByOtherTab(item.walletFingerprint));
+
     // 👑 1. TTL 过滤：由于播放器占线太久导致的过期堆积钱包交易（超过 8 秒）直接丢弃，不予播报
-    const validItems = list.filter(item => (now - (item._queuedAt || now)) < 8000);
+    const validItems = dedupedList.filter(item => (now - (item._queuedAt || now)) < 8000);
     if (validItems.length === 0) {
         onComplete();
         return;
