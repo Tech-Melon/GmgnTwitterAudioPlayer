@@ -5,7 +5,141 @@ let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
 let sharedAudioCtx = null; // 🌟 全局共享 AudioContext（必须在 _unlockAutoplay 之前声明）
 
 // ════════════════════════════════════════════════════════════
-// 🔒 跨 Tab 事件指纹去重引擎（替代旧版的 2 秒时间窗口粗暴锁）
+// 👑 Tab Leader Election — 多 Tab 单例播报引擎
+// 只有 Leader Tab 执行音频播报，其他 Tab 保持静默
+// 通过心跳 + 超时竞选实现自动故障转移
+// ════════════════════════════════════════════════════════════
+const TabLeader = {
+    _tabId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    _leaderId: null,           // 当前 Leader 的 tabId
+    _heartbeatTimer: null,     // Leader 心跳定时器
+    _electionTimer: null,      // Follower 竞选超时器
+    _initialized: false,
+    HEARTBEAT_INTERVAL: 2000,  // 心跳间隔 2s
+    ELECTION_TIMEOUT: 5000,    // 无心跳 5s 后发起竞选
+
+    init() {
+        if (this._initialized) return;
+        this._initialized = true;
+
+        // 复用现有 BroadcastChannel，监听 Leader 相关消息
+        // （audioSyncChannel.onmessage 会在后面统一设置，这里不覆盖）
+
+        // 尝试竞选：广播 LEADER_CLAIM
+        this._broadcastMsg({ type: 'LEADER_CLAIM', tabId: this._tabId });
+
+        // 设置竞选超时：如果 ELECTION_TIMEOUT 内没有收到 LEADER_EXISTS，则自封 Leader
+        this._electionTimer = setTimeout(() => {
+            if (!this._leaderId) {
+                this._becomeLeader();
+            }
+        }, 1000); // 首次竞选等待 1 秒（比心跳间隔短，快速启动）
+
+        console.log(`🏁 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 已加入选举 | tabId: ${this._tabId.slice(0, 12)}...`);
+    },
+
+    /** 当前 Tab 是否为 Leader */
+    isLeader() {
+        return this._leaderId === this._tabId;
+    },
+
+    /** 自封为 Leader，启动心跳 */
+    _becomeLeader() {
+        this._leaderId = this._tabId;
+        if (this._electionTimer) { clearTimeout(this._electionTimer); this._electionTimer = null; }
+        this._startHeartbeat();
+        console.log(`👑 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 已成为 Leader | tabId: ${this._tabId.slice(0, 12)}...`);
+    },
+
+    /** Leader 定期心跳广播 */
+    _startHeartbeat() {
+        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+        this._heartbeatTimer = setInterval(() => {
+            this._broadcastMsg({ type: 'LEADER_HEARTBEAT', tabId: this._tabId });
+        }, this.HEARTBEAT_INTERVAL);
+        // 立刻发一次心跳
+        this._broadcastMsg({ type: 'LEADER_HEARTBEAT', tabId: this._tabId });
+    },
+
+    /** Follower 重置竞选超时计时器 */
+    _resetElectionTimer() {
+        if (this._electionTimer) clearTimeout(this._electionTimer);
+        this._electionTimer = setTimeout(() => {
+            console.log(`⏰ [GMGN 盯盘伴侣 - TabLeader] Leader 心跳超时，发起新一轮竞选...`);
+            this._leaderId = null;
+            this._broadcastMsg({ type: 'LEADER_CLAIM', tabId: this._tabId });
+            // 再等 1 秒，无人抢先则自封
+            this._electionTimer = setTimeout(() => {
+                if (!this._leaderId) {
+                    this._becomeLeader();
+                }
+            }, 1000);
+        }, this.ELECTION_TIMEOUT);
+    },
+
+    /** 处理来自其他 Tab 的 Leader 消息 */
+    handleMessage(data) {
+        if (!data || typeof data.type !== 'string') return;
+
+        switch (data.type) {
+            case 'LEADER_HEARTBEAT':
+                if (data.tabId === this._tabId) return; // 自己的心跳忽略
+                this._leaderId = data.tabId;
+                this._resetElectionTimer();
+                // 如果自己之前是 Leader 但收到了别人的心跳（不应该发生，但做防御）
+                if (this._heartbeatTimer && this._leaderId !== this._tabId) {
+                    clearInterval(this._heartbeatTimer);
+                    this._heartbeatTimer = null;
+                    console.log(`🔇 [GMGN 盯盘伴侣 - TabLeader] 检测到其他 Leader，本 Tab 降级为 Follower`);
+                }
+                break;
+
+            case 'LEADER_CLAIM':
+                if (data.tabId === this._tabId) return; // 自己的竞选忽略
+                if (this.isLeader()) {
+                    // 自己是 Leader，告诉对方别抢
+                    this._broadcastMsg({ type: 'LEADER_EXISTS', tabId: this._tabId });
+                }
+                break;
+
+            case 'LEADER_EXISTS':
+                if (data.tabId === this._tabId) return;
+                // 有人已经是 Leader，自己成为 Follower
+                this._leaderId = data.tabId;
+                if (this._electionTimer) { clearTimeout(this._electionTimer); this._electionTimer = null; }
+                this._resetElectionTimer();
+                if (this._heartbeatTimer) {
+                    clearInterval(this._heartbeatTimer);
+                    this._heartbeatTimer = null;
+                }
+                console.log(`🔇 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 为 Follower，已静默 | Leader: ${data.tabId.slice(0, 12)}...`);
+                break;
+        }
+    },
+
+    /** 安全广播消息（扩展热更新后 channel 可能已关闭） */
+    _broadcastMsg(msg) {
+        try {
+            audioSyncChannel.postMessage(msg);
+        } catch (e) {
+            // BroadcastChannel 已关闭，静默忽略
+        }
+    },
+
+    /** 页面卸载时清理（让其他 Tab 快速接管） */
+    destroy() {
+        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+        if (this._electionTimer) clearTimeout(this._electionTimer);
+        this._heartbeatTimer = null;
+        this._electionTimer = null;
+    }
+};
+
+// 🛡️ 页面卸载时清理 Leader 资源，让其他 Tab 快速故障转移
+window.addEventListener('beforeunload', () => TabLeader.destroy());
+
+// ════════════════════════════════════════════════════════════
+// 🔒 跨 Tab 事件指纹去重引擎（降级为兜底安全网，Leader Election 从源头解决）
 // 原理：用事件内容本身（trigger IDs / txHash）作为指纹，只抑制相同事件
 // BroadcastChannel 传递延迟 <1ms，天然利用多 WS 连接间的到达时差避免竞态
 // ════════════════════════════════════════════════════════════
@@ -180,7 +314,7 @@ const idb = {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('IDB get timeout')), 3000))
             ]);
         } catch (e) {
-            console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 读取失败，跳过缓存:", e.message);
+            console.debug("⚠️ [GMGN 盯盘伴侣 - IDB] 读取失败，跳过缓存:", e.message);
             this.db = null; // 标记连接失效，下次强制重连
             return null;    // 返回 null 让调用方走网络请求
         }
@@ -197,7 +331,7 @@ const idb = {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('IDB set timeout')), 3000))
             ]);
         } catch (e) {
-            console.warn("⚠️ [GMGN 盯盘伴侣 - IDB] 写入失败，跳过缓存:", e.message);
+            console.debug("⚠️ [GMGN 盯盘伴侣 - IDB] 写入失败，跳过缓存:", e.message);
             this.db = null;
         }
         // 🧹 定期检查容量并批量清理最旧缓存
@@ -523,10 +657,10 @@ const TwitterBatch = {
             }
         });
 
-        // 🔥 预热锁定批次的最终合并 TTS
+        // 🔥 预热锁定批次的最终合并 TTS（格式必须与 playTwitterDirectly 实际播放一致）
         const names = _extractTwitterNames(batchTriggers);
         if (names.length > 0) {
-            prefetchTTSToCache(`${names.join('、')}一起发推啦`, 'twitter');
+            prefetchTTSToCache(`${names.join('、')} 发推啦`, 'twitter');
         }
 
         this.lockedBatches.push({
@@ -546,9 +680,8 @@ const TwitterBatch = {
         if (this.pendingTriggers.length === 0) return;
         const names = _extractTwitterNames(this.pendingTriggers);
         if (names.length === 0) return;
-        const text = names.length >= 3
-            ? `${names.join('、')}一起发推啦`
-            : `${names.join('、')} 发推啦`;
+        // 统一格式为 " 发推啦"，与 playTwitterDirectly 的 VIP/unmapped TTS 路径一致
+        const text = `${names.join('、')} 发推啦`;
         prefetchTTSToCache(text, 'twitter');
     },
 
@@ -658,9 +791,17 @@ const DynamicPlaybackScheduler = {
     /** 🛡️ 启动超时兜底计时器：防止 onComplete 因异常路径未被调用导致调度器永久卡死 */
     _startSafetyTimer() {
         if (this._safetyTimer) clearTimeout(this._safetyTimer);
+        this._safetyTimerStart = Date.now();
         this._safetyTimer = setTimeout(() => {
             if (this._isPlaying) {
-                console.warn("⚠️ [GMGN 盯盘伴侣 - Scheduler] 检测到播放器超时卡死 (15s)，强制释放");
+                const elapsed = Date.now() - (this._safetyTimerStart || 0);
+                console.warn("⚠️ [GMGN 盯盘伴侣 - Scheduler] 检测到播放器超时卡死，强制释放", {
+                    elapsed: `${(elapsed / 1000).toFixed(1)}s`,
+                    activePlayer: !!currentActivePlayer,
+                    poolStatus: AudioPool.status(),
+                    twitterBatchPending: TwitterBatch.hasContent(),
+                    walletBatchPending: WalletBatch.hasContent()
+                });
                 this._isPlaying = false;
                 this.releaseAndNext();
             }
@@ -722,24 +863,34 @@ const blobCache = new Map(); // src → blobUrl（字符串）
 async function warmupAudio(src) {
     if (!src || blobCache.has(src)) return;
     blobCache.set(src, null); // 占位，防止并发重复获取
-    try {
-        let fetchUrl = src;
-        // chrome-extension:// URL 需要先 fetch 转 Blob（页面上下文跨域限制）
-        if (src.startsWith('chrome-extension://')) {
-            fetchUrl = src;
-        }
-        // data: URI 和 blob: URL 不需要预热
-        if (src.startsWith('data:') || src.startsWith('blob:')) {
-            blobCache.set(src, src); // 直接缓存原始 URL
-            return;
-        }
-        const res = await fetch(fetchUrl);
+
+    // data: URI 和 blob: URL 不需要预热
+    if (src.startsWith('data:') || src.startsWith('blob:')) {
+        blobCache.set(src, src); // 直接缓存原始 URL
+        return;
+    }
+
+    const doFetch = async () => {
+        const res = await fetch(src);
         const blob = await res.blob();
         const blobUrl = URL.createObjectURL(blob);
         blobCache.set(src, blobUrl);
+    };
+
+    try {
+        await doFetch();
     } catch (e) {
-        blobCache.delete(src); // 失败时移除占位，允许下次重试
-        console.warn("⚠️ [GMGN 盯盘伴侣] 音频预热失败:", src, e.message);
+        // 首次失败静默：扩展初始化窗口期 fetch 可能暂时不可达，2 秒后重试一次
+        console.debug("🔄 [GMGN 盯盘伴侣] 音频预热首次失败，2s 后重试:", src.split('/').pop());
+        setTimeout(async () => {
+            try {
+                await doFetch();
+                console.debug("✅ [GMGN 盯盘伴侣] 音频预热重试成功:", src.split('/').pop());
+            } catch (retryErr) {
+                blobCache.delete(src); // 重试仍失败，移除占位允许后续重试
+                console.warn("⚠️ [GMGN 盯盘伴侣] 音频预热重试仍失败:", src.split('/').pop(), retryErr.message);
+            }
+        }, 2000);
     }
 }
 
@@ -819,10 +970,19 @@ function applyGainToAudio(audio, volume) {
 
 audioSyncChannel.onmessage = (event) => {
     const data = event.data;
-    if (data && typeof data === 'object' && data.type === 'EVENT_PLAYED') {
+    if (!data || typeof data !== 'object') return;
+
+    // 👑 Leader Election 消息分发
+    TabLeader.handleMessage(data);
+
+    // 🔒 指纹去重（兜底安全网）
+    if (data.type === 'EVENT_PLAYED') {
         otherTabPlayedEvents.set(data.key, Date.now());
     }
 };
+
+// 👑 启动 Leader 选举（必须在 onmessage 注册之后）
+TabLeader.init();
 
 // 🌟 优化：仅在真正的休眠恢复时重新初始化（避免标签页切换时的性能浪费）
 let lastVisibilityState = document.visibilityState;
@@ -843,12 +1003,20 @@ document.addEventListener('visibilitychange', () => {
         audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
         audioSyncChannel.onmessage = (event) => {
             const data = event.data;
-            if (data && typeof data === 'object' && data.type === 'EVENT_PLAYED') {
+            if (!data || typeof data !== 'object') return;
+            // 👑 Leader Election 消息分发
+            TabLeader.handleMessage(data);
+            // 🔒 指纹去重（兜底安全网）
+            if (data.type === 'EVENT_PLAYED') {
                 otherTabPlayedEvents.set(data.key, Date.now());
             }
         };
 
-        // 重新加载配置并预热音频
+        // 👑 休眠恢复后重新发起 Leader 竞选（先清理旧定时器，再重置状态）
+        TabLeader.destroy();
+        TabLeader._leaderId = null;
+        TabLeader._initialized = false;
+        TabLeader.init();
         try {
             chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary'], async (result) => {
                 if (chrome.runtime.lastError) return;
@@ -1311,8 +1479,8 @@ function playTwitterDirectly(triggers, fingerprints) {
 
     const now = Date.now();
 
-    // 👑 1. TTL 过滤：由于播放器占线太久导致的过期堆积推特事件（超过 8 秒）直接丢弃，不予播报
-    const validTriggers = triggers.filter(t => (now - (t._queuedAt || now)) < 8000);
+    // 👑 1. TTL 过滤：由于播放器占线太久导致的过期堆积（超过 15 秒）直接丢弃，不予播报
+    const validTriggers = triggers.filter(t => (now - (t._queuedAt || now)) < 15000);
     if (validTriggers.length === 0) {
         onComplete();
         return;
@@ -1354,7 +1522,9 @@ function playTwitterDirectly(triggers, fingerprints) {
             }
             if (!overloadNames.includes(speakerName)) overloadNames.push(speakerName);
         });
-        playNetworkTTS(`${overloadNames.sort().join('、')}一起发推啦`, 'twitter', onComplete);
+        const overloadText = `${overloadNames.sort().join('、')}一起发推啦`;
+        console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 推特超载概括: "${overloadText}"`);
+        playNetworkTTS(overloadText, 'twitter', onComplete);
         fingerprints.forEach(fp => markEventPlayed(fp));
         return;
     }
@@ -1436,28 +1606,33 @@ function playTwitterDirectly(triggers, fingerprints) {
         // 1️⃣ 优先合并连读 VIP 账号 of TTS 人声
         if (vipTtsNames.length > 0) {
             const mergedNames = vipTtsNames.sort().join('、');
+            console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 推特 VIP TTS: "${mergedNames} 发推啦"`);
             playNetworkTTS(`${mergedNames} 发推啦`, 'twitter', onComplete);
         }
         // 2️⃣ 其次合并连读普通未映射账号 of TTS 人声
         else if (unmappedTtsNames.length > 0) {
             const mergedNames = unmappedTtsNames.sort().join('、');
+            console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 推特普通 TTS: "${mergedNames} 发推啦"`);
             playNetworkTTS(`${mergedNames} 发推啦`, 'twitter', onComplete);
         }
         // 3️⃣ 播放专属定制/自定义铃声 (并发时最新打断)
         else if (vipAudioSources.length > 0) {
             const latestSrc = vipAudioSources[vipAudioSources.length - 1];
+            console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 推特专属铃声: ${latestSrc.split('/').pop()}`);
             playConcurrentAudio(latestSrc, 'twitter', null, onComplete);
         } 
         // 4️⃣ 降级默认音频
         else if (vipFallbackDefault) {
-            console.log("🎵 [GMGN 盯盘伴侣] 降级播放默认音频");
+            console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 推特 VIP 降级默认铃声`);
             playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), 'twitter', null, onComplete);
         }
         // 5️⃣ 合并普通提示音 (600ms 窗口去重，最多只响起 1 次铃声，防轰炸与叠音)
         else if (needsUnmappedDefaultAudio) {
+            console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 推特普通默认铃声`);
             playConcurrentAudio(chrome.runtime.getURL(configCache.defaultAudio || 'sounds/default.MP3'), 'twitter', null, onComplete);
         } else {
             // 如果经过过滤和去重后没有任何发声项，立刻驱动调度器释放锁并流转
+            console.log(`⏭️ [GMGN 盯盘伴侣 - 跳过] 推特事件经过滤后无发声项，释放调度器`);
             onComplete();
         }
     } catch (error) {
@@ -1495,6 +1670,9 @@ function handleTwitterMsg(e) {
         pendingWsMessages.push(e);
         return;
     }
+
+    // 👑 多 Tab 单例保护：只有 Leader Tab 执行播报（放在 isCacheReady 之后，确保配置已就绪）
+    if (!TabLeader.isLeader()) return;
 
     try {
         // 🔒 先广播指纹给其他 Tab，抢占去重窗口（先广播再入队）
@@ -1552,8 +1730,8 @@ function playWalletDirectly(list) {
     // 🔒 二次校验：调度器排队期间，其他 Tab 可能已经播放了此事件
     const dedupedList = list.filter(item => !item.walletFingerprint || !wasPlayedByOtherTab(item.walletFingerprint));
 
-    // 👑 1. TTL 过滤：由于播放器占线太久导致的过期堆积钱包交易（超过 8 秒）直接丢弃，不予播报
-    const validItems = dedupedList.filter(item => (now - (item._queuedAt || now)) < 8000);
+    // 👑 1. TTL 过滤：由于播放器占线太久导致的过期堆积（超过 15 秒）直接丢弃，不予播报
+    const validItems = dedupedList.filter(item => (now - (item._queuedAt || now)) < 15000);
     if (validItems.length === 0) {
         onComplete();
         return;
@@ -1615,7 +1793,9 @@ function playWalletDirectly(list) {
                 ? `${namesStr}${actionStr}`
                 : `${namesStr}${actionStr}${g.tokenSymbol}`;
         });
-        playNetworkTTS(overloadPhrases.join('，'), 'wallet', onComplete);
+        const walletOverloadText = overloadPhrases.join('，');
+        console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包超载概括: "${walletOverloadText}"`);
+        playNetworkTTS(walletOverloadText, 'wallet', onComplete);
         playShortBeep('wallet');
         return;
     }
@@ -1625,15 +1805,19 @@ function playWalletDirectly(list) {
         const t = currentItems[0];
 
         if (t.action === 'buy') {
+            console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包: "${t.rename}买入 ${t.tokenSymbol}"`);
             playNetworkTTS([`${t.rename}买入`, t.tokenSymbol], 'wallet', onComplete);
         } else {
             const isClearAll = t.ooc === 1;
             const actionText = isClearAll ? '清仓' : '减仓';
             if (t.cnt === 'processed') {
+                console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包第一阶段: "${t.rename}"`);
                 playNetworkTTS([t.rename], 'wallet', onComplete);
             } else if (t.cnt === 'confirm') {
+                console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包第二阶段: "${actionText}${t.tokenSymbol}"`);
                 playNetworkTTS([`${actionText}${t.tokenSymbol}`], 'wallet', onComplete);
             } else {
+                console.log(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包完整: "${t.rename}${actionText} ${t.tokenSymbol}"`);
                 playNetworkTTS([`${t.rename}${actionText}`, t.tokenSymbol], 'wallet', onComplete);
             }
         }
@@ -1702,6 +1886,9 @@ async function handleWalletMsg(e) {
 
     try {
         if (!configCache.isMasterEnabled || !configCache.enableWallet) return;
+
+        // 👑 多 Tab 单例保护：只有 Leader Tab 执行播报
+        if (!TabLeader.isLeader()) return;
         const item = e.detail;
     if (!item || !item.m || !item.bs) return; // 'm' is maker, 'bs' is token symbol
     
