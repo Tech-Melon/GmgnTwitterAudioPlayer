@@ -423,6 +423,7 @@ const AudioPool = {
     release(audio) {
         if (!audio || audio.__poolIdx === undefined || !audio.__inUse) return;
         try {
+            clearAudioTailFade(audio);
             audio.pause();
             audio.onended = null;
             audio.onerror = null;
@@ -480,6 +481,7 @@ function interruptCurrentAudio() {
     if (currentActivePlayer) {
         try {
             console.log("🛑 [GMGN 盯盘伴侣] 收到新音频信号，打断当前正在播放的旧音频");
+            clearAudioTailFade(currentActivePlayer);
             currentActivePlayer.pause();
             currentActivePlayer.onended = null;
             currentActivePlayer.onerror = null;
@@ -929,25 +931,24 @@ function initPreloadCache() {
 function applyGainToAudio(audio, volume) {
     // 已绑定 GainNode 的池 Audio：统一通过 GainNode 控制音量（createMediaElementSource 不可逆）
     if (audio.__gainNode) {
+        if (sharedAudioCtx) {
+            audio.__gainNode.gain.cancelScheduledValues(sharedAudioCtx.currentTime);
+        }
         audio.__gainNode.gain.value = volume;
         audio.volume = 1.0;
         return;
     }
 
-    // 未绑定 GainNode：音量 ≤100% 直接用原生 volume
-    if (volume <= 1.0) {
-        audio.volume = Math.max(0, volume);
-        return;
-    }
-    audio.volume = 1.0;
-
-    // 🛡️ Autoplay 未解锁时，禁止触碰 AudioContext
-    if (!_autoplayUnlocked) return;
-
-    // 🔥 防御静音 Bug：非 blob/data 源不走 Web Audio API
     const isSafe = audio.crossOrigin === "anonymous" ||
                   (audio.src && (audio.src.startsWith('blob:') || audio.src.startsWith('data:')));
-    if (!isSafe) return;
+
+    // 未解锁或非安全源无法走 Web Audio，降级为原生音量。
+    if (!_autoplayUnlocked || !isSafe) {
+        audio.volume = Math.max(0, Math.min(volume, 1.0));
+        return;
+    }
+
+    audio.volume = 1.0;
 
     try {
         if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -964,6 +965,46 @@ function applyGainToAudio(audio, volume) {
     } catch (e) {
         console.warn("[GMGN 盯盘伴侣] 超级音量增益失败，降级为 100% 音量:", e);
     }
+}
+
+const AUDIO_TAIL_FADE_SEC = 0.055;
+const AUDIO_RELEASE_GRACE_MS = 120;
+
+function clearAudioTailFade(audio) {
+    if (audio && audio.__tailFadeTimer) {
+        clearTimeout(audio.__tailFadeTimer);
+        audio.__tailFadeTimer = null;
+    }
+}
+
+function scheduleAudioTailFade(audio, volume, fadeSec = AUDIO_TAIL_FADE_SEC) {
+    clearAudioTailFade(audio);
+    if (!audio || !audio.__gainNode || !sharedAudioCtx) return;
+
+    const schedule = () => {
+        if (!audio.__gainNode || !sharedAudioCtx) return;
+        if (!Number.isFinite(audio.duration) || audio.duration <= fadeSec) return;
+
+        const delayMs = Math.max(0, (audio.duration - audio.currentTime - fadeSec) * 1000);
+        audio.__tailFadeTimer = setTimeout(() => {
+            if (!audio.__gainNode || !sharedAudioCtx || audio.paused || audio.ended) return;
+            const now = sharedAudioCtx.currentTime;
+            audio.__gainNode.gain.cancelScheduledValues(now);
+            audio.__gainNode.gain.setValueAtTime(volume, now);
+            audio.__gainNode.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
+        }, delayMs);
+    };
+
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        schedule();
+    } else {
+        audio.addEventListener('loadedmetadata', schedule, { once: true });
+    }
+}
+
+function releaseAudioAfterQuietTail(audio, callback) {
+    clearAudioTailFade(audio);
+    setTimeout(callback, AUDIO_RELEASE_GRACE_MS);
 }
 
 
@@ -1339,8 +1380,10 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
                 blobUrls.forEach(u => URL.revokeObjectURL(u));
                 player.__blobUrls = null;
                 if (currentActivePlayer === player) currentActivePlayer = null;
-                AudioPool.release(player);
-                if (onComplete) onComplete();
+                releaseAudioAfterQuietTail(player, () => {
+                    AudioPool.release(player);
+                    if (onComplete) onComplete();
+                });
                 return;
             }
 
@@ -1366,7 +1409,9 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
                 if (isOwner && onComplete) onComplete(); // 🛡️ 仅 owner 驱动调度
             };
 
-            player.play().catch(e => {
+            player.play().then(() => {
+                scheduleAudioTailFade(player, targetVolume * 1.5);
+            }).catch(e => {
                 if (e.name !== 'NotAllowedError') {
                     console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播放段失败:", e.name);
                 }
@@ -1420,8 +1465,10 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
         player.onended = () => {
             const isOwner = currentActivePlayer === player;
             if (isOwner) currentActivePlayer = null;
-            AudioPool.release(player);
-            if (isOwner && onComplete) onComplete(); // 🛡️ 仅 owner 驱动调度
+            releaseAudioAfterQuietTail(player, () => {
+                AudioPool.release(player);
+                if (isOwner && onComplete) onComplete(); // 🛡️ 仅 owner 驱动调度
+            });
         };
 
         player.onerror = (e) => {
@@ -1437,7 +1484,9 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
             }
         };
 
-        player.play().catch(e => {
+        player.play().then(() => {
+            scheduleAudioTailFade(player, targetVolume);
+        }).catch(e => {
             if (e.name !== 'NotAllowedError') {
                 console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", { error: e.name, message: e.message });
             }
@@ -1711,13 +1760,18 @@ function playShortBeep(source = 'wallet') {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         const vol = source === 'wallet' ? (configCache.walletVolume || 1.0) : (configCache.twitterVolume || 1.0);
+        const now = ctx.currentTime;
+        const peak = 0.3 * Math.min(vol, 1.5);
         osc.type = 'sine';
         osc.frequency.value = 880;
-        gain.gain.value = 0.3 * Math.min(vol, 1.5);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0001), now + 0.01);
+        gain.gain.setValueAtTime(Math.max(peak, 0.0001), now + 0.055);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.08);
+        osc.start(now);
+        osc.stop(now + 0.085);
     } catch (e) {
         console.warn('🔔 [GMGN 盯盘伴侣] beep 播放失败:', e);
     }
@@ -2182,4 +2236,4 @@ async function handleWalletMsg(e) {
     }
 }
 
-window.addEventListener('GMGN_WALLET_MSG', handleWalletMsg);
+window.addEventListener('GMGN_WALLET_MSG', handleWalletMsg);

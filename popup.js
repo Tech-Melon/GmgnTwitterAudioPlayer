@@ -20,10 +20,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let sharedAudioCtx = null;
     function applyGainToAudio(audio, volume) {
-        if (volume <= 1.0) {
-            audio.volume = Math.max(0, volume);
+        if (audio.__gainNode) {
+            if (sharedAudioCtx) {
+                audio.__gainNode.gain.cancelScheduledValues(sharedAudioCtx.currentTime);
+            }
+            audio.__gainNode.gain.value = volume;
+            audio.volume = 1.0;
             return;
         }
+
+        const isSafe = audio.src && (audio.src.startsWith('blob:') || audio.src.startsWith('data:'));
+        if (!isSafe) {
+            audio.volume = Math.max(0, Math.min(volume, 1.0));
+            return;
+        }
+
         audio.volume = 1.0;
         try {
             if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -46,6 +57,35 @@ document.addEventListener('DOMContentLoaded', () => {
             console.warn("[GMGN 盯盘伴侣] 超级音量失败:", e);
         }
     }
+
+    const scheduleAudioTailFade = (audio, volume, fadeSec = 0.055) => {
+        if (!audio || !audio.__gainNode || !sharedAudioCtx) return;
+        const schedule = () => {
+            if (!Number.isFinite(audio.duration) || audio.duration <= fadeSec) return;
+            const delayMs = Math.max(0, (audio.duration - audio.currentTime - fadeSec) * 1000);
+            setTimeout(() => {
+                if (!audio.__gainNode || audio.paused || audio.ended) return;
+                const now = sharedAudioCtx.currentTime;
+                audio.__gainNode.gain.cancelScheduledValues(now);
+                audio.__gainNode.gain.setValueAtTime(volume, now);
+                audio.__gainNode.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
+            }, delayMs);
+        };
+
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            schedule();
+        } else {
+            audio.addEventListener('loadedmetadata', schedule, { once: true });
+        }
+    };
+
+    const cleanupAudioElement = (audio) => {
+        if (!audio) return;
+        try {
+            audio.removeAttribute('src');
+            audio.load();
+        } catch (e) { }
+    };
 
     // 🌟 Tab 切换逻辑（带状态持久化，重新打开插件时保留上次页面）
     const switchTab = (tabId) => {
@@ -412,6 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const audioSrc = typeof customAudios[customId] === 'string' ? customAudios[customId] : customAudios[customId].data;
                     const audio = new Audio(audioSrc);
                     applyGainToAudio(audio, parseFloat(els.twitterVolume.value));
+                    audio.addEventListener('ended', () => cleanupAudioElement(audio), { once: true });
                     audio.play().catch(e => showToast('播放失败'));
                 });
 
@@ -554,6 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (needsTTS) {
                                 audio.addEventListener('ended', playEdgeTTS);
                             }
+                            audio.addEventListener('ended', () => cleanupAudioElement(audio), { once: true });
                             audio.play().catch(err => showToast('播放失败'));
                         } else if (needsTTS) {
                             // 纯 TTS 试听
@@ -658,8 +700,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            applyGainToAudio(audio, parseFloat(els.walletVolume.value) * 1.5);
-            audio.play();
+            const targetVolume = parseFloat(els.walletVolume.value) * 1.5;
+            applyGainToAudio(audio, targetVolume);
+            audio.addEventListener('ended', () => {
+                setTimeout(() => {
+                    URL.revokeObjectURL(audioUrl);
+                    audio.removeAttribute('src');
+                    audio.load();
+                }, 120);
+            }, { once: true });
+            audio.play()
+                .then(() => scheduleAudioTailFade(audio, targetVolume))
+                .catch(e => showToast('TTS 播放失败'));
             els.toast.classList.remove('show');
         } catch (e) {
             console.error(e);
@@ -683,17 +735,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            applyGainToAudio(audio, parseFloat(els.twitterVolume.value) * 1.5);
+            const targetVolume = parseFloat(els.twitterVolume.value) * 1.5;
+            applyGainToAudio(audio, targetVolume);
             audio.addEventListener('ended', () => {
-                URL.revokeObjectURL(audioUrl);
-                audio.removeAttribute('src');
-                audio.load();
-                if (audio.__sourceNode) {
-                    try { audio.__sourceNode.disconnect(); } catch (e) { }
-                    try { audio.__gainNode.disconnect(); } catch (e) { }
-                }
+                setTimeout(() => {
+                    URL.revokeObjectURL(audioUrl);
+                    audio.removeAttribute('src');
+                    audio.load();
+                    if (audio.__sourceNode) {
+                        try { audio.__sourceNode.disconnect(); } catch (e) { }
+                        try { audio.__gainNode.disconnect(); } catch (e) { }
+                    }
+                }, 120);
             });
-            audio.play().catch(e => showToast('TTS 播放失败'));
+            audio.play()
+                .then(() => scheduleAudioTailFade(audio, targetVolume))
+                .catch(e => showToast('TTS 播放失败'));
         } catch (e) {
             showToast('网络 TTS 失败，请检查连接');
         }
@@ -928,9 +985,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 const a = document.createElement('a');
-                a.href = URL.createObjectURL(zipBlob);
+                const downloadUrl = URL.createObjectURL(zipBlob);
+                a.href = downloadUrl;
                 a.download = `Gmgn音频备份_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.zip`;
                 a.click();
+                setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
                 showToast('🎉 导出成功！', 3000);
             } catch (error) {
                 showToast('打包失败！');
