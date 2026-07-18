@@ -477,29 +477,36 @@ AudioPool.init();
 // ════════════════════════════════════════════════════════════
 let currentActivePlayer = null;
 
-/** 中止当前正在播放的全局音频 */
+/** 中止当前正在播放的全局音频（短淡出后释放，立即放权给新播报） */
 function interruptCurrentAudio() {
-    if (currentActivePlayer) {
-        try {
-            console.log("🛑 [GMGN 盯盘伴侣] 收到新音频信号，打断当前正在播放的旧音频");
-            clearAudioTailFade(currentActivePlayer);
-            // 先瞬时静音再 pause，避免通话 AEC 场景硬切 pop
-            muteGainInstant(currentActivePlayer);
-            currentActivePlayer.pause();
-            currentActivePlayer.onended = null;
-            currentActivePlayer.onerror = null;
+    if (!currentActivePlayer) return;
+    const player = currentActivePlayer;
+    currentActivePlayer = null; // 立刻放权，新音频可马上占用池
+    try {
+        console.log("🛑 [GMGN 盯盘伴侣] 收到新音频信号，打断当前正在播放的旧音频");
+        clearAudioTailFade(player);
+        fadeOutGain(player, AUDIO_INTERRUPT_FADE_SEC);
+        player.onended = null;
+        player.onerror = null;
 
-            // 清理多段 TTS 挂载的 URL
-            if (currentActivePlayer.__blobUrls) {
-                currentActivePlayer.__blobUrls.forEach(u => URL.revokeObjectURL(u));
-                currentActivePlayer.__blobUrls = null;
+        const urls = player.__blobUrls;
+        player.__blobUrls = null;
+        const gen = (player.__interruptGen = (player.__interruptGen || 0) + 1);
+
+        // 等短淡出完成再 pause/归还，避免 AEC 硬切 pop
+        setTimeout(() => {
+            if (player.__interruptGen !== gen) return;
+            try {
+                player.pause();
+                if (urls) urls.forEach(u => URL.revokeObjectURL(u));
+                AudioPool.release(player);
+            } catch (e) {
+                try { AudioPool.release(player); } catch (e2) { /* ignore */ }
             }
-
-            AudioPool.release(currentActivePlayer);
-        } catch (e) {
-            console.warn("⚠️ [GMGN 盯盘伴侣] 打断音频异常:", e);
-        }
-        currentActivePlayer = null;
+        }, Math.ceil(AUDIO_INTERRUPT_FADE_SEC * 1000) + 8);
+    } catch (e) {
+        console.warn("⚠️ [GMGN 盯盘伴侣] 打断音频异常:", e);
+        try { AudioPool.release(player); } catch (e2) { /* ignore */ }
     }
 }
 
@@ -931,12 +938,14 @@ function initPreloadCache() {
 }
 
 // sharedAudioCtx 已提升到文件顶部声明
-const AUDIO_HEAD_FADE_SEC = 0.04; // 起音淡入，降低通话 AEC 场景下的 pop 声
-const AUDIO_TAIL_FADE_SEC = 0.055;
-const AUDIO_RELEASE_GRACE_MS = 120;
+const AUDIO_HEAD_FADE_SEC = 0.07;      // 起音淡入 ~70ms，通话 AEC 更稳
+const AUDIO_TAIL_FADE_SEC = 0.065;     // 收尾淡出
+const AUDIO_INTERRUPT_FADE_SEC = 0.018; // 打断短淡出 ~18ms
+const AUDIO_SEGMENT_GAP_MS = 28;       // 多段 TTS 段间空隙，给 AEC 喘息
+const AUDIO_RELEASE_GRACE_MS = 140;
 
 /**
- * 设置播放增益；默认 40ms 淡入，避免硬起振触发音响回声消除 pop
+ * 设置播放增益；默认 70ms 淡入，避免硬起振触发音响回声消除 pop
  * @param {HTMLAudioElement} audio
  * @param {number} volume
  * @param {{ fadeIn?: boolean, fadeSec?: number }} [options]
@@ -983,6 +992,8 @@ function applyGainToAudio(audio, volume, options = {}) {
         if (!audio.__sourceNode) {
             audio.__sourceNode = sharedAudioCtx.createMediaElementSource(audio);
             audio.__gainNode = sharedAudioCtx.createGain();
+            // 新建时先静音，避免绑定瞬间泄漏声
+            audio.__gainNode.gain.value = 0.0001;
             audio.__sourceNode.connect(audio.__gainNode);
             audio.__gainNode.connect(sharedAudioCtx.destination);
         }
@@ -999,7 +1010,7 @@ function applyGainToAudio(audio, volume, options = {}) {
     }
 }
 
-/** 打断前瞬时静音，避免硬 pause 在通话 AEC 下产生 pop */
+/** 瞬时静音（段切换/强制归零） */
 function muteGainInstant(audio) {
     if (!audio || !audio.__gainNode || !sharedAudioCtx) return;
     try {
@@ -1007,6 +1018,41 @@ function muteGainInstant(audio) {
         audio.__gainNode.gain.cancelScheduledValues(now);
         audio.__gainNode.gain.setValueAtTime(0.0001, now);
     } catch (e) { /* ignore */ }
+}
+
+/** 短淡出（打断用），从当前增益 ramp 到近 0 */
+function fadeOutGain(audio, fadeSec = AUDIO_INTERRUPT_FADE_SEC) {
+    if (!audio || !audio.__gainNode || !sharedAudioCtx) {
+        muteGainInstant(audio);
+        return;
+    }
+    try {
+        const now = sharedAudioCtx.currentTime;
+        const g = audio.__gainNode.gain;
+        const cur = Math.max(g.value || 0.0001, 0.0001);
+        g.cancelScheduledValues(now);
+        g.setValueAtTime(cur, now);
+        g.linearRampToValueAtTime(0.0001, now + Math.max(fadeSec, 0.001));
+    } catch (e) {
+        muteGainInstant(audio);
+    }
+}
+
+/**
+ * play() 成功后，等一帧再淡入，减少「已出声但 gain 调度未挂上」的竞态 pop
+ */
+function fadeInAfterPlay(audio, volume, onReady) {
+    const run = () => {
+        if (!audio) return;
+        applyGainToAudio(audio, volume, { fadeIn: true });
+        if (typeof onReady === 'function') onReady();
+    };
+    // 双 rAF：对齐到浏览器绘制/音频渲染边界
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(run));
+    } else {
+        setTimeout(run, 16);
+    }
 }
 
 function clearAudioTailFade(audio) {
@@ -1425,6 +1471,8 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
         let blobUrls = []; // 记录所有创建之 Blob URL，以便在打断时能统一释放
         player.__blobUrls = blobUrls;
 
+        const ttsVol = Math.min(targetVolume * 1.2, 1.5);
+
         const playSegment = (idx) => {
             // 如果在异步段回调中被新来的消息打断，则立刻退出，不再继续播下一段
             if (currentActivePlayer !== player) {
@@ -1447,16 +1495,24 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
             const url = URL.createObjectURL(validBlobs[idx]);
             blobUrls.push(url);
             player.src = url;
-            // TTS 轻微增压，上限 1.5；先静音绑定，play 后再淡入（避免 AEC pop）
-            const ttsVol = Math.min(targetVolume * 1.2, 1.5);
+            // 先静音绑定，play + 双 rAF 后再淡入（避免通话 AEC pop）
             applyGainToAudio(player, 0.0001, { fadeIn: false });
 
             player.onended = () => {
-                if (currentActivePlayer === player) {
-                    playSegment(idx + 1);
-                } else {
+                if (currentActivePlayer !== player) {
                     blobUrls.forEach(u => URL.revokeObjectURL(u));
+                    return;
                 }
+                // 段结束强制归零，再进入下一段（最后一段无 gap）
+                muteGainInstant(player);
+                const nextIdx = idx + 1;
+                if (nextIdx >= validBlobs.length) {
+                    playSegment(nextIdx);
+                    return;
+                }
+                setTimeout(() => {
+                    if (currentActivePlayer === player) playSegment(nextIdx);
+                }, AUDIO_SEGMENT_GAP_MS);
             };
 
             player.onerror = () => {
@@ -1469,8 +1525,12 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
             };
 
             player.play().then(() => {
-                applyGainToAudio(player, ttsVol, { fadeIn: true });
-                scheduleAudioTailFade(player, ttsVol);
+                if (currentActivePlayer !== player) return;
+                fadeInAfterPlay(player, ttsVol, () => {
+                    if (currentActivePlayer === player) {
+                        scheduleAudioTailFade(player, ttsVol);
+                    }
+                });
             }).catch(e => {
                 if (e.name !== 'NotAllowedError') {
                     console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播放段失败:", e.name);
@@ -1520,7 +1580,7 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
         }
 
         player.src = finalUrl;
-        // 先静音绑定 GainNode，真正 play 后再淡入
+        // 先静音绑定 GainNode，play + 双 rAF 后再淡入
         applyGainToAudio(player, 0.0001, { fadeIn: false });
 
         player.onended = () => {
@@ -1546,8 +1606,12 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
         };
 
         player.play().then(() => {
-            applyGainToAudio(player, targetVolume, { fadeIn: true });
-            scheduleAudioTailFade(player, targetVolume);
+            if (currentActivePlayer !== player) return;
+            fadeInAfterPlay(player, targetVolume, () => {
+                if (currentActivePlayer === player) {
+                    scheduleAudioTailFade(player, targetVolume);
+                }
+            });
         }).catch(e => {
             if (e.name !== 'NotAllowedError') {
                 console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", { error: e.name, message: e.message });
