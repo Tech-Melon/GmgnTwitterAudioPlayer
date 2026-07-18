@@ -10,15 +10,74 @@
     }
     const OriginalWebSocket = window.__GMGN_ORIGINAL_WS; // 始终引用真正的原生 WS
 
+    // 插件自身依赖的频道，禁止误拦
+    const PROTECTED_CHANNELS = new Set([
+        'twitter_user_monitor_basic',
+        'following_wallet_activity'
+    ]);
+
     window.__GMGN_AUDIO_ENABLED = true;
+    window.__GMGN_WS_BLOCKLIST = window.__GMGN_WS_BLOCKLIST instanceof Set
+        ? window.__GMGN_WS_BLOCKLIST
+        : new Set();
+
     window.addEventListener('GMGN_AUDIO_TOGGLE', function (e) {
         window.__GMGN_AUDIO_ENABLED = e.detail.enabled;
     });
+
+    window.addEventListener('GMGN_WS_BLOCKLIST', function (e) {
+        const channels = (e.detail && Array.isArray(e.detail.channels)) ? e.detail.channels : [];
+        const next = new Set();
+        channels.forEach((ch) => {
+            if (typeof ch !== 'string') return;
+            const name = ch.trim();
+            if (!name || PROTECTED_CHANNELS.has(name)) return;
+            next.add(name);
+        });
+        window.__GMGN_WS_BLOCKLIST = next;
+        console.log(`🛡️ [GMGN 盯盘伴侣 - Inject] WSS 屏蔽列表已更新 (${next.size}):`, Array.from(next));
+    });
+
+    /**
+     * 解析 subscribe 消息中的 channel 名
+     * 兼容：纯 JSON / 前缀数字帧 / Socket.IO 风格
+     */
+    function extractSubscribeChannel(raw) {
+        if (typeof raw !== 'string' || raw.length === 0) return null;
+        // 快速路径：非 subscribe 直接跳过
+        if (raw.indexOf('subscribe') === -1) return null;
+
+        try {
+            let payloadStr = raw.replace(/^\d+/, '');
+            if (!payloadStr) return null;
+            let parsed = JSON.parse(payloadStr);
+            if (Array.isArray(parsed) && parsed.length >= 2) parsed = parsed[1];
+            if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+            if (parsed && parsed.action === 'subscribe' && typeof parsed.channel === 'string') {
+                return parsed.channel;
+            }
+        } catch (e) {
+            // 非 JSON 或解析失败：不拦截
+        }
+        return null;
+    }
 
     window.WebSocket = function (url, protocols) {
         console.log(`🔗 [GMGN 盯盘伴侣 - Inject] 成功捕获 WebSocket 连接创建:`, url);
         const ws = new OriginalWebSocket(url, protocols);
 
+        // ── 出站：拦截黑名单频道的 subscribe ──
+        const originalSend = ws.send.bind(ws);
+        ws.send = function (data) {
+            const channel = extractSubscribeChannel(data);
+            if (channel && window.__GMGN_WS_BLOCKLIST && window.__GMGN_WS_BLOCKLIST.has(channel)) {
+                console.log(`🚫 [GMGN 盯盘伴侣 - Inject] 已拦截 WSS 订阅: ${channel}`);
+                return;
+            }
+            return originalSend(data);
+        };
+
+        // ── 入站：仅监听推特 / 钱包监控频道 ──
         ws.addEventListener('message', function (event) {
             if (!window.__GMGN_AUDIO_ENABLED) return;
             if (typeof event.data !== 'string') return;
@@ -52,8 +111,8 @@
                     });
 
                     if (triggersMap.size > 0) {
-                        const triggersArray = Array.from(triggersMap).map(([id, data]) => ({ 
-                            id, 
+                        const triggersArray = Array.from(triggersMap).map(([id, data]) => ({
+                            id,
                             tw: data.actionType,
                             name: data.displayName
                         }));
@@ -78,4 +137,10 @@
         return ws;
     };
     window.WebSocket.prototype = OriginalWebSocket.prototype;
+    // 保留静态常量（CONNECTING/OPEN/CLOSING/CLOSED）
+    ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach((k) => {
+        try {
+            window.WebSocket[k] = OriginalWebSocket[k];
+        } catch (e) { /* ignore */ }
+    });
 })();

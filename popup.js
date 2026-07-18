@@ -19,12 +19,24 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     let sharedAudioCtx = null;
-    function applyGainToAudio(audio, volume) {
+    function applyGainToAudio(audio, volume, options = {}) {
+        const fadeIn = options.fadeIn !== false;
+        const fadeSec = options.fadeSec !== undefined ? options.fadeSec : 0.04;
+        const safeVol = Math.max(0.0001, volume);
+
         if (audio.__gainNode) {
             if (sharedAudioCtx) {
-                audio.__gainNode.gain.cancelScheduledValues(sharedAudioCtx.currentTime);
+                const now = sharedAudioCtx.currentTime;
+                audio.__gainNode.gain.cancelScheduledValues(now);
+                if (fadeIn && fadeSec > 0) {
+                    audio.__gainNode.gain.setValueAtTime(0.0001, now);
+                    audio.__gainNode.gain.linearRampToValueAtTime(safeVol, now + fadeSec);
+                } else {
+                    audio.__gainNode.gain.setValueAtTime(safeVol, now);
+                }
+            } else {
+                audio.__gainNode.gain.value = safeVol;
             }
-            audio.__gainNode.gain.value = volume;
             audio.volume = 1.0;
             return;
         }
@@ -52,7 +64,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     delete audio.__gainNode;
                 }, { once: true });
             }
-            audio.__gainNode.gain.value = volume;
+            const now = sharedAudioCtx.currentTime;
+            audio.__gainNode.gain.cancelScheduledValues(now);
+            if (fadeIn && fadeSec > 0) {
+                audio.__gainNode.gain.setValueAtTime(0.0001, now);
+                audio.__gainNode.gain.linearRampToValueAtTime(safeVol, now + fadeSec);
+            } else {
+                audio.__gainNode.gain.setValueAtTime(safeVol, now);
+            }
         } catch (e) {
             console.warn("[GMGN 盯盘伴侣] 超级音量失败:", e);
         }
@@ -114,6 +133,13 @@ document.addEventListener('DOMContentLoaded', () => {
         enableWalletToggle: document.getElementById('enableWalletToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
         enableTTSToggle: document.getElementById('enableTTSToggle'), // 🌟 新增的 TTS 开关
+        wsBlockDetails: document.getElementById('wsBlockDetails'),
+        wsBlockBadge: document.getElementById('wsBlockBadge'),
+        wsBlockChevron: document.getElementById('wsBlockChevron'),
+        wsBlockPresetList: document.getElementById('wsBlockPresetList'),
+        wsBlockCustomInput: document.getElementById('wsBlockCustomInput'),
+        wsBlockAddBtn: document.getElementById('wsBlockAddBtn'),
+        wsBlockActiveList: document.getElementById('wsBlockActiveList'),
         twitterTtsVoiceSelect: document.getElementById('twitterTtsVoiceSelect'),
         twitterTtsRateSelect: document.getElementById('twitterTtsRateSelect'),
         twitterTtsPitchSelect: document.getElementById('twitterTtsPitchSelect'),
@@ -266,12 +292,80 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCustomDropdown('editSelectTrigger', 'editSelectMenu', 'editSelectSearch', 'editSelectList', 'editAudioValue', 'editAudioName');
 
 
+    // ── WSS 频道屏蔽 ──
+    const WS_PROTECTED = new Set(['twitter_user_monitor_basic', 'following_wallet_activity']);
+    const WS_PRESETS = [
+        // 链/行情/配置
+        'chain_stat', 'major_coin_price', 'user_config_update', 'personal_remind_event', 'public_broadcast',
+        // 钱包/交易
+        'wallet_trade_data', 'wallet_balance', 'swap_order_info', 'strategy_order_info',
+        // TG 订单
+        'tg_order_info', 'tg_processed_order_info', 'tg_monitor',
+        // 推特附属（不含 basic 核心监控）
+        'twitter_monitor_express', 'twitter_user_monitor_token', 'twitter_monitor_translation'
+    ];
+    let blockedWsChannels = [];
+
+    const normalizeChannel = (name) => String(name || '').trim();
+
+    const saveBlockedWsChannels = (list, toastMsg) => {
+        const cleaned = [];
+        const seen = new Set();
+        list.forEach((ch) => {
+            const n = normalizeChannel(ch);
+            if (!n || WS_PROTECTED.has(n) || seen.has(n)) return;
+            seen.add(n);
+            cleaned.push(n);
+        });
+        blockedWsChannels = cleaned;
+        chrome.storage.local.set({ blockedWsChannels: cleaned }, () => {
+            renderWsBlockUI();
+            if (toastMsg) showToast(toastMsg);
+        });
+    };
+
+    const renderWsBlockUI = () => {
+        if (!els.wsBlockPresetList || !els.wsBlockActiveList) return;
+        const active = new Set(blockedWsChannels);
+
+        // 折叠态摘要角标
+        if (els.wsBlockBadge) {
+            const n = blockedWsChannels.length;
+            els.wsBlockBadge.textContent = n > 0 ? `已屏蔽 ${n}` : '未启用';
+            els.wsBlockBadge.style.color = n > 0 ? 'var(--primary-color)' : 'var(--text-sec)';
+        }
+
+        // 紧凑预设：checkbox chips
+        els.wsBlockPresetList.innerHTML = WS_PRESETS.map((ch) => {
+            const checked = active.has(ch) ? 'checked' : '';
+            return `<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;user-select:none;background:rgba(0,0,0,0.04);padding:2px 6px;border-radius:4px;">
+                <input type="checkbox" data-ws-preset="${escapeHTML(ch)}" ${checked} style="margin:0;">
+                <span style="font-family:ui-monospace,monospace;font-size:10px;">${escapeHTML(ch)}</span>
+            </label>`;
+        }).join('');
+
+        // 展开后：自定义频道可点 × 删除
+        const customOnes = blockedWsChannels.filter((c) => !WS_PRESETS.includes(c));
+        if (customOnes.length === 0) {
+            els.wsBlockActiveList.textContent = blockedWsChannels.length
+                ? `当前屏蔽 ${blockedWsChannels.length} 个预设频道`
+                : '未屏蔽任何频道';
+        } else {
+            els.wsBlockActiveList.innerHTML = '自定义: ' + customOnes.map((c) =>
+                `<span style="display:inline-flex;align-items:center;gap:2px;background:rgba(0,0,0,0.05);padding:1px 6px;border-radius:4px;margin:0 3px 3px 0;font-family:ui-monospace,monospace;font-size:10px;">
+                    ${escapeHTML(c)}
+                    <button type="button" data-ws-remove="${escapeHTML(c)}" style="border:none;background:transparent;cursor:pointer;color:var(--text-sec);padding:0 0 0 2px;font-size:12px;line-height:1;" title="移除">×</button>
+                </span>`
+            ).join('');
+        }
+    };
+
     function loadData() {
         chrome.storage.local.get([
-            'twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 
-            'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 
-            'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 
-            'walletFilters', 'walletDictionary'
+            'twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'enableTwitter', 'enableWallet',
+            'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped',
+            'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts',
+            'walletFilters', 'walletDictionary', 'blockedWsChannels'
         ], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
@@ -284,6 +378,9 @@ document.addEventListener('DOMContentLoaded', () => {
             els.enableWalletToggle.checked = result.enableWallet !== false;
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
+
+            blockedWsChannels = Array.isArray(result.blockedWsChannels) ? result.blockedWsChannels.slice() : [];
+            renderWsBlockUI();
 
             // 🌟 迁移和初始化音量设置
             const defaultVol = result.globalVolume !== undefined ? result.globalVolume : 1;
@@ -572,7 +669,8 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const blob = await res.blob();
                                 const audioUrl = URL.createObjectURL(blob);
                                 const audio = new Audio(audioUrl);
-                                applyGainToAudio(audio, parseFloat(els.twitterVolume.value) * 1.5);
+                                const ttsVol = Math.min(parseFloat(els.twitterVolume.value) * 1.2, 1.5);
+                                applyGainToAudio(audio, 0.0001, { fadeIn: false });
                                 audio.addEventListener('ended', () => {
                                     URL.revokeObjectURL(audioUrl);
                                     audio.removeAttribute('src');
@@ -582,7 +680,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                         try { audio.__gainNode.disconnect(); } catch (e) { }
                                     }
                                 });
-                                audio.play().catch(e => showToast('TTS 播放失败'));
+                                audio.play()
+                                    .then(() => applyGainToAudio(audio, ttsVol, { fadeIn: true }))
+                                    .catch(e => showToast('TTS 播放失败'));
                             } catch (e) {
                                 showToast('网络 TTS 失败，请检查连接');
                             }
@@ -700,8 +800,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            const targetVolume = parseFloat(els.walletVolume.value) * 1.5;
-            applyGainToAudio(audio, targetVolume);
+            const targetVolume = Math.min(parseFloat(els.walletVolume.value) * 1.2, 1.5);
+            applyGainToAudio(audio, 0.0001, { fadeIn: false });
             audio.addEventListener('ended', () => {
                 setTimeout(() => {
                     URL.revokeObjectURL(audioUrl);
@@ -710,7 +810,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 120);
             }, { once: true });
             audio.play()
-                .then(() => scheduleAudioTailFade(audio, targetVolume))
+                .then(() => {
+                    applyGainToAudio(audio, targetVolume, { fadeIn: true });
+                    scheduleAudioTailFade(audio, targetVolume);
+                })
                 .catch(e => showToast('TTS 播放失败'));
             els.toast.classList.remove('show');
         } catch (e) {
@@ -735,8 +838,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const blob = await res.blob();
             const audioUrl = URL.createObjectURL(blob);
             const audio = new Audio(audioUrl);
-            const targetVolume = parseFloat(els.twitterVolume.value) * 1.5;
-            applyGainToAudio(audio, targetVolume);
+            const targetVolume = Math.min(parseFloat(els.twitterVolume.value) * 1.2, 1.5);
+            applyGainToAudio(audio, 0.0001, { fadeIn: false });
             audio.addEventListener('ended', () => {
                 setTimeout(() => {
                     URL.revokeObjectURL(audioUrl);
@@ -749,7 +852,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 120);
             });
             audio.play()
-                .then(() => scheduleAudioTailFade(audio, targetVolume))
+                .then(() => {
+                    applyGainToAudio(audio, targetVolume, { fadeIn: true });
+                    scheduleAudioTailFade(audio, targetVolume);
+                })
                 .catch(e => showToast('TTS 播放失败'));
         } catch (e) {
             showToast('网络 TTS 失败，请检查连接');
@@ -848,6 +954,54 @@ document.addEventListener('DOMContentLoaded', () => {
     els.masterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ isMasterEnabled: e.target.checked }, () => { showToast(e.target.checked ? '监听已开启' : '监听已暂停'); }); });
     els.enableTwitterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableTwitter: e.target.checked }, () => { showToast(e.target.checked ? '推特监控已开启' : '推特监控已关闭'); }); });
     els.enableWalletToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableWallet: e.target.checked }, () => { showToast(e.target.checked ? '钱包监控已开启' : '钱包监控已关闭'); }); });
+
+    // WSS 频道屏蔽：折叠箭头 + 预设勾选 / 自定义添加 / 删除
+    if (els.wsBlockDetails) {
+        const syncChevron = () => {
+            if (els.wsBlockChevron) {
+                els.wsBlockChevron.style.transform = els.wsBlockDetails.open ? 'rotate(90deg)' : 'none';
+            }
+        };
+        els.wsBlockDetails.addEventListener('toggle', syncChevron);
+        syncChevron();
+    }
+    if (els.wsBlockPresetList) {
+        els.wsBlockPresetList.addEventListener('change', (e) => {
+            const cb = e.target;
+            if (!cb || cb.type !== 'checkbox' || !cb.dataset.wsPreset) return;
+            const ch = cb.dataset.wsPreset;
+            const next = new Set(blockedWsChannels);
+            if (cb.checked) next.add(ch);
+            else next.delete(ch);
+            saveBlockedWsChannels(Array.from(next), cb.checked ? `已屏蔽 ${ch}` : `已取消 ${ch}`);
+        });
+    }
+    if (els.wsBlockActiveList) {
+        els.wsBlockActiveList.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-ws-remove]');
+            if (!btn) return;
+            const ch = btn.dataset.wsRemove;
+            saveBlockedWsChannels(blockedWsChannels.filter((c) => c !== ch), `已移除 ${ch}`);
+        });
+    }
+    if (els.wsBlockAddBtn) {
+        els.wsBlockAddBtn.addEventListener('click', () => {
+            const ch = normalizeChannel(els.wsBlockCustomInput && els.wsBlockCustomInput.value);
+            if (!ch) return showToast('请输入频道名');
+            if (WS_PROTECTED.has(ch)) return showToast('该频道为插件依赖，禁止屏蔽');
+            if (blockedWsChannels.includes(ch)) return showToast('已在屏蔽列表中');
+            els.wsBlockCustomInput.value = '';
+            saveBlockedWsChannels([...blockedWsChannels, ch], `已添加 ${ch}`);
+        });
+    }
+    if (els.wsBlockCustomInput) {
+        els.wsBlockCustomInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (els.wsBlockAddBtn) els.wsBlockAddBtn.click();
+            }
+        });
+    }
     els.playDefaultToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
             showToast(e.target.checked ? '已开启默认音频' : '已关闭默认音频');

@@ -212,6 +212,10 @@
             font-weight: 500;
         }
 
+        /* WSS 屏蔽折叠：隐藏默认三角，避免与自定义 ▸ 重复 */
+        #wsBlockDetails > summary::-webkit-details-marker { display: none; }
+        #wsBlockDetails > summary::marker { content: ''; }
+
         input[type="text"] {
             width: 100%;
             padding: 10px;
@@ -864,6 +868,30 @@
                     </select>
                 </div>
             </div>
+        </div>
+
+        <!-- WSS 频道屏蔽：默认折叠，节省设置页篇幅 -->
+        <div class="card" style="padding: 0; overflow: hidden;">
+            <details id="wsBlockDetails">
+                <summary id="wsBlockSummary" style="list-style: none; cursor: pointer; user-select: none; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <span style="font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 6px;">
+                        🛡️ WSS 频道屏蔽
+                        <span id="wsBlockBadge" style="font-size: 11px; font-weight: 500; color: var(--text-sec); background: rgba(0,0,0,0.06); padding: 1px 7px; border-radius: 10px;">0</span>
+                    </span>
+                    <span id="wsBlockChevron" style="font-size: 12px; color: var(--text-sec); transition: transform 0.15s;">▸</span>
+                </summary>
+                <div style="padding: 0 16px 12px;">
+                    <div style="font-size: 11px; color: var(--text-sec); line-height: 1.4; margin-bottom: 8px;">
+                        刷新后拦截选中频道的 subscribe，省流量。不会屏蔽推特/钱包监控频道。
+                    </div>
+                    <div id="wsBlockPresetList" style="display: flex; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 8px; font-size: 11px;"></div>
+                    <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+                        <input type="text" id="wsBlockCustomInput" placeholder="自定义频道名" style="flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; box-sizing: border-box;">
+                        <button id="wsBlockAddBtn" class="btn-icon" style="padding: 4px 10px; font-size: 12px; white-space: nowrap;">添加</button>
+                    </div>
+                    <div id="wsBlockActiveList" style="font-size: 11px; color: var(--text-sec);"></div>
+                </div>
+            </details>
         </div>
     </div>
 
