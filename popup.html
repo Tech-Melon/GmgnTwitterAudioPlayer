@@ -212,9 +212,49 @@
             font-weight: 500;
         }
 
-        /* WSS 屏蔽折叠：隐藏默认三角，避免与自定义 ▸ 重复 */
-        #wsBlockDetails > summary::-webkit-details-marker { display: none; }
-        #wsBlockDetails > summary::marker { content: ''; }
+        /* WSS 屏蔽 / 钱包导出 折叠：隐藏默认三角，避免与自定义 ▸ 重复 */
+        #wsBlockDetails > summary::-webkit-details-marker,
+        #walletExportDetails > summary::-webkit-details-marker { display: none; }
+        #wsBlockDetails > summary::marker,
+        #walletExportDetails > summary::marker { content: ''; }
+
+        /* 钱包导出：浅边框收纳条，可识别但不抢主按钮 */
+        #walletExportDetails {
+            margin-top: 8px;
+            border: 1px solid #c7c7cc;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.02);
+            overflow: hidden;
+        }
+        #walletExportDetails > summary {
+            list-style: none;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-main);
+            transition: background 0.15s;
+        }
+        #walletExportDetails > summary:hover {
+            background: rgba(0, 0, 0, 0.04);
+        }
+        #walletExportDetails[open] {
+            border-color: #b0b0b5;
+            background: rgba(0, 0, 0, 0.025);
+        }
+        #walletExportDetails[open] > summary {
+            border-bottom: 1px solid #e5e5ea;
+        }
+        #walletExportDetails .wallet-export-actions {
+            display: flex;
+            gap: 8px;
+            padding: 8px 10px 10px;
+        }
 
         input[type="text"] {
             width: 100%;
@@ -758,6 +798,18 @@
                 <button id="importWalletDictBtn" class="outline">导入钱包</button>
                 <button id="clearWalletDictBtn" class="outline" style="color: #ff3b30; border-color: #ff3b30;">清空</button>
             </div>
+            <!-- 导出钱包：默认收起 -->
+            <details id="walletExportDetails">
+                <summary>
+                    <span>📤 导出钱包</span>
+                    <span id="walletExportChevron" style="font-size: 11px; color: var(--text-sec); transition: transform 0.15s;">▸</span>
+                </summary>
+                <div class="wallet-export-actions">
+                    <button id="copyWalletDictBtn" class="outline" style="font-size: 12px; padding: 8px;">一键复制</button>
+                    <button id="exportWalletJsonBtn" class="outline" style="font-size: 12px; padding: 8px;">导出JSON</button>
+                    <button id="exportWalletTxtBtn" class="outline" style="font-size: 12px; padding: 8px;">导出TXT</button>
+                </div>
+            </details>
             <div id="walletDictStatus" style="font-size: 12px; color: var(--text-sec); margin-top: 8px;">已导入: 0 个地址</div>
             <input type="text" id="walletSearchInput" placeholder="🔍 搜索钱包地址或备注..." style="margin-top: 12px; background: #f2f2f7; border: none; padding: 8px 12px; border-radius: 8px; font-size: 13px; width: 100%; box-sizing: border-box;">
             <div id="walletList" class="list-container" style="margin-top: 8px; max-height: 200px;"></div>

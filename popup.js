@@ -214,6 +214,11 @@ document.addEventListener('DOMContentLoaded', () => {
         walletDictInput: document.getElementById('walletDictInput'),
         importWalletDictBtn: document.getElementById('importWalletDictBtn'),
         clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
+        walletExportDetails: document.getElementById('walletExportDetails'),
+        walletExportChevron: document.getElementById('walletExportChevron'),
+        copyWalletDictBtn: document.getElementById('copyWalletDictBtn'),
+        exportWalletJsonBtn: document.getElementById('exportWalletJsonBtn'),
+        exportWalletTxtBtn: document.getElementById('exportWalletTxtBtn'),
         walletDictStatus: document.getElementById('walletDictStatus'),
         walletSearchInput: document.getElementById('walletSearchInput'),
         walletList: document.getElementById('walletList'),
@@ -1347,6 +1352,111 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     });
+
+    // ── 钱包导出：默认收起，点击展开 ──
+    if (els.walletExportDetails && els.walletExportChevron) {
+        const syncWalletExportChevron = () => {
+            els.walletExportChevron.style.transform = els.walletExportDetails.open ? 'rotate(90deg)' : 'none';
+        };
+        els.walletExportDetails.addEventListener('toggle', syncWalletExportChevron);
+        syncWalletExportChevron();
+    }
+
+    /** 将 walletDictionary 转为可导出的数组 [{address, rename}] */
+    function walletDictToExportList(dict) {
+        return Object.entries(dict || {}).map(([address, info]) => ({
+            address,
+            rename: (info && info.rename) || ''
+        }));
+    }
+
+    function walletExportDateStamp() {
+        return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    }
+
+    function downloadTextFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function copyTextToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+        // 兜底：隐藏 textarea + execCommand
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('clipboard unavailable');
+    }
+
+    function withWalletExportData(handler) {
+        chrome.storage.local.get(['walletDictionary'], (result) => {
+            const dict = result.walletDictionary || {};
+            const list = walletDictToExportList(dict);
+            if (list.length === 0) {
+                showToast('暂无钱包可导出');
+                return;
+            }
+            handler(list);
+        });
+    }
+
+    // 一键复制：默认复制 JSON（可直接粘贴再导入）
+    if (els.copyWalletDictBtn) {
+        els.copyWalletDictBtn.addEventListener('click', () => {
+            withWalletExportData(async (list) => {
+                const jsonStr = JSON.stringify(list, null, 2);
+                try {
+                    await copyTextToClipboard(jsonStr);
+                    showToast(`已复制 ${list.length} 个钱包 (JSON)`);
+                } catch (e) {
+                    showToast('复制失败，请手动导出文件');
+                }
+            });
+        });
+    }
+
+    // 导出 JSON：与导入格式互通
+    if (els.exportWalletJsonBtn) {
+        els.exportWalletJsonBtn.addEventListener('click', () => {
+            withWalletExportData((list) => {
+                const jsonStr = JSON.stringify(list, null, 2);
+                downloadTextFile(jsonStr, `GmgnWallets_${walletExportDateStamp()}.json`, 'application/json');
+                showToast(`已导出 ${list.length} 个钱包 (JSON)`);
+            });
+        });
+    }
+
+    // 导出 TXT：每行 address,rename
+    if (els.exportWalletTxtBtn) {
+        els.exportWalletTxtBtn.addEventListener('click', () => {
+            withWalletExportData((list) => {
+                const lines = list.map(item => {
+                    // 备注里若含逗号，用双引号包一层，避免歧义
+                    const rename = item.rename || '';
+                    const safeRename = /[",\n\r]/.test(rename)
+                        ? `"${rename.replace(/"/g, '""')}"`
+                        : rename;
+                    return `${item.address},${safeRename}`;
+                });
+                const txt = lines.join('\n');
+                downloadTextFile(txt, `GmgnWallets_${walletExportDateStamp()}.txt`, 'text/plain;charset=utf-8');
+                showToast(`已导出 ${list.length} 个钱包 (TXT)`);
+            });
+        });
+    }
 
     // 🌟 处理钱包设置面板的展开/收起下拉逻辑
     document.querySelectorAll('.toggle-panel-btn').forEach(btn => {
