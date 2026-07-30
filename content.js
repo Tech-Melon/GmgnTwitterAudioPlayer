@@ -7,34 +7,41 @@ let sharedAudioCtx = null; // 🌟 全局共享 AudioContext（必须在 _unlock
 // ════════════════════════════════════════════════════════════
 // 👑 Tab Leader Election — 多 Tab 单例播报引擎
 // 只有 Leader Tab 执行音频播报，其他 Tab 保持静默
-// 通过心跳 + 超时竞选实现自动故障转移
+// 确定性决胜：tabId 字典序更小者优先，杜绝同时开 Tab 双 Leader 互相踩死
+// 已解锁 autoplay 的 Tab 可主动 TAKEOVER，避免「Leader 在后台未解锁 → 全静音」
 // ════════════════════════════════════════════════════════════
 const TabLeader = {
     _tabId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     _leaderId: null,           // 当前 Leader 的 tabId
     _heartbeatTimer: null,     // Leader 心跳定时器
-    _electionTimer: null,      // Follower 竞选超时器
+    _electionTimer: null,      // Follower 竞选超时器 / 竞选等待
     _initialized: false,
+    _audioReady: false,        // 本 Tab 是否已解锁 autoplay
+    _seenCandidates: null,     // 本轮竞选观察到的 tabId 集合
     HEARTBEAT_INTERVAL: 2000,  // 心跳间隔 2s
     ELECTION_TIMEOUT: 5000,    // 无心跳 5s 后发起竞选
+    CLAIM_WAIT: 900,           // 竞选收集窗口（等齐同批 CLAIM）
+
+    /** tabId 字典序更小 = 更强（同批打开时时间戳更早者优先，结果全 Tab 一致） */
+    _isStronger(a, b) {
+        if (!a) return false;
+        if (!b) return true;
+        return String(a) < String(b);
+    },
+
+    /** 在候选集合中选出最强 tabId */
+    _pickWinner(candidates) {
+        let winner = null;
+        for (const id of candidates) {
+            if (!winner || this._isStronger(id, winner)) winner = id;
+        }
+        return winner;
+    },
 
     init() {
         if (this._initialized) return;
         this._initialized = true;
-
-        // 复用现有 BroadcastChannel，监听 Leader 相关消息
-        // （audioSyncChannel.onmessage 会在后面统一设置，这里不覆盖）
-
-        // 尝试竞选：广播 LEADER_CLAIM
-        this._broadcastMsg({ type: 'LEADER_CLAIM', tabId: this._tabId });
-
-        // 设置竞选超时：如果 ELECTION_TIMEOUT 内没有收到 LEADER_EXISTS，则自封 Leader
-        this._electionTimer = setTimeout(() => {
-            if (!this._leaderId) {
-                this._becomeLeader();
-            }
-        }, 1000); // 首次竞选等待 1 秒（比心跳间隔短，快速启动）
-
+        this._startClaimRound();
         console.log(`🏁 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 已加入选举 | tabId: ${this._tabId.slice(0, 12)}...`);
     },
 
@@ -43,22 +50,119 @@ const TabLeader = {
         return this._leaderId === this._tabId;
     },
 
+    /** 用户已解锁 autoplay：优先让本 Tab 成为 Leader（否则后台 Leader 无法发声） */
+    markAudioReady() {
+        this._audioReady = true;
+        if (this.isLeader()) {
+            this._broadcastMsg({
+                type: 'LEADER_HEARTBEAT',
+                tabId: this._tabId,
+                audioReady: true
+            });
+            return;
+        }
+        // 已解锁 Tab 主动接管播报权
+        this._broadcastMsg({
+            type: 'LEADER_TAKEOVER',
+            tabId: this._tabId,
+            audioReady: true
+        });
+        this._becomeLeader('用户解锁后接管');
+    },
+
+    /**
+     * Leader 因 NotAllowedError 等无法播报时弃权，让已解锁 Tab 接手
+     * 未解锁时才弃权，避免无限互踢
+     */
+    abdicate(reason) {
+        if (!this.isLeader()) return;
+        // 自己已解锁却仍 NotAllowed 时不反复弃权（可能是短暂策略限制）
+        if (this._audioReady && reason === 'NotAllowedError') {
+            console.warn(`⚠️ [GMGN 盯盘伴侣 - TabLeader] 已解锁仍 NotAllowed，保持 Leader | ${reason}`);
+            return;
+        }
+        console.warn(`🏳️ [GMGN 盯盘伴侣 - TabLeader] Leader 弃权: ${reason || 'unknown'}`);
+        this._stopHeartbeat();
+        const prev = this._tabId;
+        this._leaderId = null;
+        this._broadcastMsg({ type: 'LEADER_ABDICATE', tabId: prev, reason: reason || '' });
+        // 自己未解锁：等待他人接管；超时后再竞选
+        this._resetElectionTimer();
+    },
+
+    /** 发起一轮 CLAIM 竞选 */
+    _startClaimRound() {
+        this._seenCandidates = new Set([this._tabId]);
+        this._broadcastMsg({ type: 'LEADER_CLAIM', tabId: this._tabId, audioReady: this._audioReady });
+        if (this._electionTimer) clearTimeout(this._electionTimer);
+        this._electionTimer = setTimeout(() => {
+            this._electionTimer = null;
+            this._tryBecomeLeaderAfterClaim();
+        }, this.CLAIM_WAIT);
+    },
+
+    /** 竞选窗口结束：仅最强候选自封，其余跟随之 */
+    _tryBecomeLeaderAfterClaim() {
+        // 窗口期内已确认跟随他人
+        if (this._leaderId && this._leaderId !== this._tabId) return;
+        if (this.isLeader()) return;
+
+        const candidates = this._seenCandidates || new Set([this._tabId]);
+        const winner = this._pickWinner(candidates);
+        if (winner === this._tabId) {
+            this._becomeLeader('竞选胜出');
+        } else {
+            // 认让更强候选，等其心跳；用 election timer 兜底故障转移
+            console.log(`🤝 [GMGN 盯盘伴侣 - TabLeader] 认让更强候选 | winner: ${String(winner).slice(0, 12)}...`);
+            this._becomeFollower(winner, '竞选认让');
+        }
+    },
+
     /** 自封为 Leader，启动心跳 */
-    _becomeLeader() {
+    _becomeLeader(reason) {
         this._leaderId = this._tabId;
         if (this._electionTimer) { clearTimeout(this._electionTimer); this._electionTimer = null; }
         this._startHeartbeat();
-        console.log(`👑 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 已成为 Leader | tabId: ${this._tabId.slice(0, 12)}...`);
+        console.log(`👑 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 已成为 Leader | tabId: ${this._tabId.slice(0, 12)}... | ${reason || ''}`);
+    },
+
+    /**
+     * 降级为 Follower
+     * @param {string} leaderId
+     * @param {string} reason
+     */
+    _becomeFollower(leaderId, reason) {
+        if (!leaderId || leaderId === this._tabId) return;
+        const changed = this._leaderId !== leaderId;
+        const wasLeader = this.isLeader();
+        this._leaderId = leaderId;
+        this._stopHeartbeat();
+        this._resetElectionTimer();
+        // 仅在 Leader 变更或从 Leader 降级时打日志，避免心跳刷屏
+        if (changed || wasLeader) {
+            console.log(`🔇 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 为 Follower | Leader: ${String(leaderId).slice(0, 12)}... | ${reason || ''}`);
+        }
+    },
+
+    _stopHeartbeat() {
+        if (this._heartbeatTimer) {
+            clearInterval(this._heartbeatTimer);
+            this._heartbeatTimer = null;
+        }
     },
 
     /** Leader 定期心跳广播 */
     _startHeartbeat() {
-        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
-        this._heartbeatTimer = setInterval(() => {
-            this._broadcastMsg({ type: 'LEADER_HEARTBEAT', tabId: this._tabId });
-        }, this.HEARTBEAT_INTERVAL);
-        // 立刻发一次心跳
-        this._broadcastMsg({ type: 'LEADER_HEARTBEAT', tabId: this._tabId });
+        this._stopHeartbeat();
+        const beat = () => {
+            this._broadcastMsg({
+                type: 'LEADER_HEARTBEAT',
+                tabId: this._tabId,
+                audioReady: this._audioReady
+            });
+        };
+        this._heartbeatTimer = setInterval(beat, this.HEARTBEAT_INTERVAL);
+        beat();
     },
 
     /** Follower 重置竞选超时计时器 */
@@ -67,53 +171,102 @@ const TabLeader = {
         this._electionTimer = setTimeout(() => {
             console.log(`⏰ [GMGN 盯盘伴侣 - TabLeader] Leader 心跳超时，发起新一轮竞选...`);
             this._leaderId = null;
-            this._broadcastMsg({ type: 'LEADER_CLAIM', tabId: this._tabId });
-            // 再等 1 秒，无人抢先则自封
-            this._electionTimer = setTimeout(() => {
-                if (!this._leaderId) {
-                    this._becomeLeader();
-                }
-            }, 1000);
+            this._startClaimRound();
         }, this.ELECTION_TIMEOUT);
     },
 
     /** 处理来自其他 Tab 的 Leader 消息 */
     handleMessage(data) {
         if (!data || typeof data.type !== 'string') return;
+        if (data.tabId && data.tabId === this._tabId) return;
 
         switch (data.type) {
-            case 'LEADER_HEARTBEAT':
-                if (data.tabId === this._tabId) return; // 自己的心跳忽略
-                this._leaderId = data.tabId;
-                this._resetElectionTimer();
-                // 如果自己之前是 Leader 但收到了别人的心跳（不应该发生，但做防御）
-                if (this._heartbeatTimer && this._leaderId !== this._tabId) {
-                    clearInterval(this._heartbeatTimer);
-                    this._heartbeatTimer = null;
-                    console.log(`🔇 [GMGN 盯盘伴侣 - TabLeader] 检测到其他 Leader，本 Tab 降级为 Follower`);
-                }
-                break;
-
-            case 'LEADER_CLAIM':
-                if (data.tabId === this._tabId) return; // 自己的竞选忽略
+            case 'LEADER_HEARTBEAT': {
+                // 确定性决胜：仅当对方更强，或自己不是 Leader 时，才跟随
                 if (this.isLeader()) {
-                    // 自己是 Leader，告诉对方别抢
-                    this._broadcastMsg({ type: 'LEADER_EXISTS', tabId: this._tabId });
+                    if (this._isStronger(data.tabId, this._tabId)) {
+                        this._becomeFollower(data.tabId, '对方心跳更强，确定性降级');
+                    } else {
+                        // 自己更强：保持 Leader，宣告存在，打破双 Leader
+                        this._broadcastMsg({
+                            type: 'LEADER_EXISTS',
+                            tabId: this._tabId,
+                            audioReady: this._audioReady
+                        });
+                    }
+                } else {
+                    this._becomeFollower(data.tabId, '跟随心跳');
                 }
                 break;
+            }
 
-            case 'LEADER_EXISTS':
-                if (data.tabId === this._tabId) return;
-                // 有人已经是 Leader，自己成为 Follower
-                this._leaderId = data.tabId;
-                if (this._electionTimer) { clearTimeout(this._electionTimer); this._electionTimer = null; }
-                this._resetElectionTimer();
-                if (this._heartbeatTimer) {
-                    clearInterval(this._heartbeatTimer);
-                    this._heartbeatTimer = null;
+            case 'LEADER_CLAIM': {
+                if (this._seenCandidates) this._seenCandidates.add(data.tabId);
+                if (this.isLeader()) {
+                    this._broadcastMsg({
+                        type: 'LEADER_EXISTS',
+                        tabId: this._tabId,
+                        audioReady: this._audioReady
+                    });
                 }
-                console.log(`🔇 [GMGN 盯盘伴侣 - TabLeader] 本 Tab 为 Follower，已静默 | Leader: ${data.tabId.slice(0, 12)}...`);
                 break;
+            }
+
+            case 'LEADER_EXISTS': {
+                if (this.isLeader()) {
+                    // 双 Leader 冲突：更强者留下
+                    if (this._isStronger(data.tabId, this._tabId)) {
+                        this._becomeFollower(data.tabId, 'EXISTS 对方更强');
+                    } else {
+                        this._broadcastMsg({
+                            type: 'LEADER_EXISTS',
+                            tabId: this._tabId,
+                            audioReady: this._audioReady
+                        });
+                    }
+                } else {
+                    this._becomeFollower(data.tabId, '确认存在 Leader');
+                }
+                break;
+            }
+
+            case 'LEADER_TAKEOVER': {
+                // 已解锁 Tab 请求接管：未解锁 Leader 必须让位；双方都解锁则比 tabId
+                if (this.isLeader()) {
+                    if (this._audioReady && this._isStronger(this._tabId, data.tabId)) {
+                        this._broadcastMsg({
+                            type: 'LEADER_EXISTS',
+                            tabId: this._tabId,
+                            audioReady: true
+                        });
+                        break;
+                    }
+                    this._becomeFollower(data.tabId, '让位给已解锁 Tab');
+                } else {
+                    this._becomeFollower(data.tabId, '跟随已解锁 Leader');
+                }
+                break;
+            }
+
+            case 'LEADER_ABDICATE': {
+                // 原 Leader 卸任：若自己跟的是他，立即竞选；已解锁者优先上位
+                if (this._leaderId && this._leaderId !== data.tabId && this.isLeader()) break;
+                if (this._leaderId === data.tabId || !this._leaderId) {
+                    this._leaderId = null;
+                    this._stopHeartbeat();
+                    if (this._audioReady) {
+                        this._broadcastMsg({
+                            type: 'LEADER_TAKEOVER',
+                            tabId: this._tabId,
+                            audioReady: true
+                        });
+                        this._becomeLeader('接管弃权 Leader');
+                    } else {
+                        this._startClaimRound();
+                    }
+                }
+                break;
+            }
         }
     },
 
@@ -128,10 +281,15 @@ const TabLeader = {
 
     /** 页面卸载时清理（让其他 Tab 快速接管） */
     destroy() {
-        if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+        const wasLeader = this.isLeader();
+        this._stopHeartbeat();
         if (this._electionTimer) clearTimeout(this._electionTimer);
         this._heartbeatTimer = null;
         this._electionTimer = null;
+        if (wasLeader) {
+            this._broadcastMsg({ type: 'LEADER_ABDICATE', tabId: this._tabId, reason: 'unload' });
+        }
+        this._leaderId = null;
     }
 };
 
@@ -206,6 +364,15 @@ const _unlockAutoplay = () => {
     // 3️⃣ 移除提示条（如果存在）
     const banner = document.getElementById('gmgn-audio-unlock-banner');
     if (banner) banner.remove();
+
+    // 4️⃣ 已解锁 Tab 接管播报权（避免 Leader 在未点击的后台页导致全静音）
+    try {
+        if (typeof TabLeader !== 'undefined' && TabLeader.markAudioReady) {
+            TabLeader.markAudioReady();
+        }
+    } catch (e) {
+        console.warn('⚠️ [GMGN 盯盘伴侣] 解锁后 Leader 接管失败:', e);
+    }
 
     ['click', 'keydown', 'touchstart'].forEach(evt =>
         document.removeEventListener(evt, _unlockAutoplay, true)
@@ -1532,7 +1699,10 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
                     }
                 });
             }).catch(e => {
-                if (e.name !== 'NotAllowedError') {
+                if (e.name === 'NotAllowedError') {
+                    console.warn('🔇 [GMGN 盯盘伴侣 - TTS] NotAllowedError：Leader 页未解锁，弃权转让');
+                    try { TabLeader.abdicate('NotAllowedError'); } catch (err) { /* ignore */ }
+                } else {
                     console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 播放段失败:", e.name);
                 }
                 blobUrls.forEach(u => URL.revokeObjectURL(u));
@@ -1613,7 +1783,10 @@ function playConcurrentAudio(src, source = 'twitter', ttsFallbackText = null, on
                 }
             });
         }).catch(e => {
-            if (e.name !== 'NotAllowedError') {
+            if (e.name === 'NotAllowedError') {
+                console.warn('🔇 [GMGN 盯盘伴侣] NotAllowedError：Leader 页未解锁，弃权转让');
+                try { TabLeader.abdicate('NotAllowedError'); } catch (err) { /* ignore */ }
+            } else {
                 console.error("❌ [GMGN 盯盘伴侣] 音频播放失败:", { error: e.name, message: e.message });
             }
             const isOwner = currentActivePlayer === player;
