@@ -2253,6 +2253,21 @@ async function handleWalletMsg(e) {
 
     if (action !== 'buy' && action !== 'sell') return; // 只关心买卖动作
 
+    // 🚫 屏蔽代币名：精确匹配（忽略大小写），买入/减仓/清仓统一丢弃
+    // 在进调度器/冷却器之前完成，仅一次字符串比较，不影响分段 TTS 延迟
+    const blockedSymbols = configCache.walletFilters && Array.isArray(configCache.walletFilters.blockedTokenSymbols)
+        ? configCache.walletFilters.blockedTokenSymbols
+        : null;
+    if (blockedSymbols && blockedSymbols.length > 0) {
+        const symKey = String(tokenSymbol).trim().toLowerCase();
+        for (let i = 0; i < blockedSymbols.length; i++) {
+            if (String(blockedSymbols[i]).trim().toLowerCase() === symKey) {
+                console.log(`🚫 [GMGN 盯盘伴侣] 代币名屏蔽，跳过播报: ${tokenSymbol}`);
+                return;
+            }
+        }
+    }
+
     if (configCache.walletFilters && amountUSD < configCache.walletFilters.minAmount) return;
     if (configCache.walletFilters && configCache.walletFilters.maxAmount > 0 && amountUSD > configCache.walletFilters.maxAmount) return;
     if (action === 'buy' && configCache.walletFilters && configCache.walletFilters.buy === false) return;

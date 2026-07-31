@@ -793,6 +793,21 @@
                     </div>
                 </div>
             </div>
+            <!-- 屏蔽代币名：精确匹配，买卖统一不播 -->
+            <div style="margin-bottom: 12px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                    <span style="font-size: 12px; color: var(--text-sec);">🚫 屏蔽代币名</span>
+                    <span id="blockedTokenBadge" style="font-size: 11px; color: var(--text-sec); background: rgba(0,0,0,0.06); padding: 1px 7px; border-radius: 10px;">未启用</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-sec); line-height: 1.4; margin-bottom: 6px;">
+                    精确匹配（忽略大小写），买入/减仓/清仓一律不播。不进入播报队列，不影响其它币延迟。
+                </div>
+                <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+                    <input type="text" id="blockedTokenInput" placeholder="如 USDT / WBNB" style="flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; box-sizing: border-box; background: transparent; color: var(--text-main);">
+                    <button id="blockedTokenAddBtn" class="btn-icon" style="padding: 4px 10px; font-size: 12px; white-space: nowrap;">添加</button>
+                </div>
+                <div id="blockedTokenList" style="display: flex; flex-wrap: wrap; gap: 4px; min-height: 18px; font-size: 11px; color: var(--text-sec);"></div>
+            </div>
             <textarea id="walletDictInput" placeholder='请前往 GMGN 网页端，复制导出的带备注钱包 JSON 数据并粘贴至此处。' style="width: 100%; height: 80px; padding: 8px; border: 1px solid #d2d2d7; border-radius: 8px; background: transparent; color: var(--text-main); font-size: 12px; margin-bottom: 8px; box-sizing: border-box; resize: vertical;"></textarea>
             <div style="display: flex; gap: 10px;">
                 <button id="importWalletDictBtn" class="outline">导入钱包</button>

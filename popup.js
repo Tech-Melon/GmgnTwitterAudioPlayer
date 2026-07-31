@@ -211,6 +211,10 @@ document.addEventListener('DOMContentLoaded', () => {
         walletMaxMcap: document.getElementById('walletMaxMcap'),
         walletMinAge: document.getElementById('walletMinAge'),
         walletMaxAge: document.getElementById('walletMaxAge'),
+        blockedTokenInput: document.getElementById('blockedTokenInput'),
+        blockedTokenAddBtn: document.getElementById('blockedTokenAddBtn'),
+        blockedTokenList: document.getElementById('blockedTokenList'),
+        blockedTokenBadge: document.getElementById('blockedTokenBadge'),
         walletDictInput: document.getElementById('walletDictInput'),
         importWalletDictBtn: document.getElementById('importWalletDictBtn'),
         clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
@@ -476,6 +480,11 @@ document.addEventListener('DOMContentLoaded', () => {
             els.walletMaxMcap.value = walletFilters.maxMcap || '';
             els.walletMinAge.value = walletFilters.minAge || '';
             els.walletMaxAge.value = walletFilters.maxAge || '';
+            // 🚫 屏蔽代币名（精确匹配，买卖统一）
+            blockedTokenSymbols = Array.isArray(walletFilters.blockedTokenSymbols)
+                ? walletFilters.blockedTokenSymbols.slice()
+                : [];
+            renderBlockedTokenUI();
 
             const walletDictionary = result.walletDictionary || {};
             els.walletDictStatus.textContent = `已导入: ${Object.keys(walletDictionary).length} 个地址`;
@@ -1203,8 +1212,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     els.cancelEditBtn.addEventListener('click', () => els.editModal.style.display = 'none');
 
+    // 🚫 屏蔽代币名（内存列表，随 walletFilters 一并持久化）
+    let blockedTokenSymbols = [];
+
+    const normalizeTokenSymbol = (name) => String(name || '').trim();
+
+    const renderBlockedTokenUI = () => {
+        if (!els.blockedTokenList) return;
+        const n = blockedTokenSymbols.length;
+        if (els.blockedTokenBadge) {
+            els.blockedTokenBadge.textContent = n > 0 ? `已屏蔽 ${n}` : '未启用';
+            els.blockedTokenBadge.style.color = n > 0 ? 'var(--primary-color)' : 'var(--text-sec)';
+        }
+        if (n === 0) {
+            els.blockedTokenList.textContent = '未屏蔽任何代币';
+            return;
+        }
+        els.blockedTokenList.innerHTML = blockedTokenSymbols.map((sym) =>
+            `<span style="display:inline-flex;align-items:center;gap:2px;background:rgba(0,0,0,0.05);padding:2px 6px;border-radius:4px;font-family:ui-monospace,monospace;font-size:11px;color:var(--text-main);">
+                ${escapeHTML(sym)}
+                <button type="button" data-token-remove="${escapeHTML(sym)}" style="border:none;background:transparent;cursor:pointer;color:var(--text-sec);padding:0 0 0 2px;font-size:12px;line-height:1;" title="移除">×</button>
+            </span>`
+        ).join('');
+    };
+
     // 🌟 钱包监控设置保存
-    const saveWalletFilters = () => {
+    const saveWalletFilters = (toastMsg) => {
         chrome.storage.local.set({
             walletFilters: {
                 buy: els.filterBuy.checked,
@@ -1227,9 +1260,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 minMcap: parseFloat(els.walletMinMcap.value) || 0,
                 maxMcap: parseFloat(els.walletMaxMcap.value) || 0,
                 minAge: parseFloat(els.walletMinAge.value) || 0,
-                maxAge: parseFloat(els.walletMaxAge.value) || 0
+                maxAge: parseFloat(els.walletMaxAge.value) || 0,
+                // 🚫 屏蔽代币名（精确匹配，保留展示大小写）
+                blockedTokenSymbols: blockedTokenSymbols.slice()
             }
+        }, () => {
+            if (toastMsg) showToast(toastMsg);
         });
+    };
+
+    const addBlockedToken = () => {
+        const raw = normalizeTokenSymbol(els.blockedTokenInput && els.blockedTokenInput.value);
+        if (!raw) return showToast('请输入代币名');
+        const key = raw.toLowerCase();
+        if (blockedTokenSymbols.some((s) => s.toLowerCase() === key)) {
+            return showToast('已在屏蔽列表中');
+        }
+        blockedTokenSymbols.push(raw);
+        if (els.blockedTokenInput) els.blockedTokenInput.value = '';
+        renderBlockedTokenUI();
+        saveWalletFilters(`已屏蔽 ${raw}`);
     };
 
     // 🧊 同币冷却器滑块实时标签更新 + 联动
@@ -1283,6 +1333,29 @@ document.addEventListener('DOMContentLoaded', () => {
     els.walletMaxMcap.addEventListener('change', saveWalletFilters);
     els.walletMinAge.addEventListener('change', saveWalletFilters);
     els.walletMaxAge.addEventListener('change', saveWalletFilters);
+
+    // 🚫 屏蔽代币名：添加 / 删除 / 回车
+    if (els.blockedTokenAddBtn) {
+        els.blockedTokenAddBtn.addEventListener('click', addBlockedToken);
+    }
+    if (els.blockedTokenInput) {
+        els.blockedTokenInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addBlockedToken();
+            }
+        });
+    }
+    if (els.blockedTokenList) {
+        els.blockedTokenList.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-token-remove]');
+            if (!btn) return;
+            const sym = btn.getAttribute('data-token-remove');
+            blockedTokenSymbols = blockedTokenSymbols.filter((s) => s !== sym);
+            renderBlockedTokenUI();
+            saveWalletFilters(`已移除 ${sym}`);
+        });
+    }
 
     els.importWalletDictBtn.addEventListener('click', () => {
         const text = els.walletDictInput.value.trim();
