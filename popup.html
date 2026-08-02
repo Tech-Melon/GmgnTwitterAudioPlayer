@@ -114,12 +114,22 @@
             display: inline-block;
             width: 44px;
             height: 24px;
+            flex-shrink: 0;
+            cursor: pointer;
+            /* 扩大可点区域，避免 scale 后点空 */
+            touch-action: manipulation;
         }
 
         .switch input {
+            /* 覆盖整个开关热区，保证点击一定能切换 checked */
+            position: absolute;
             opacity: 0;
-            width: 0;
-            height: 0;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            inset: 0;
+            cursor: pointer;
+            z-index: 2;
         }
 
         .slider {
@@ -602,16 +612,26 @@
     <div id="tab-twitter" class="tab-content active">
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <h4 style="margin: 0;">未备注账号发推提醒</h4>
+                <h4 style="margin: 0;">未配置规则账号发推提醒</h4>
                 <label class="switch">
                     <input type="checkbox" id="playDefaultToggle" checked>
                     <span class="slider"></span>
                 </label>
             </div>
             <div id="ttsSubSetting" style="display: flex; justify-content: space-between; align-items: center; padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; transition: opacity 0.3s ease;">
-                <h4 style="margin: 0; font-size: 13px; color: var(--text-sec);">↳ 使用 AI 语音念昵称 (替代默认提示音)</h4>
-                <label class="switch" style="transform: scale(0.9); transform-origin: right center;">
+                <h4 style="margin: 0; font-size: 13px; color: var(--text-sec);">↳ 使用 AI 语音念昵称（未配置 / 通用音默认走 TTS）</h4>
+                <label class="switch" style="transform: scale(0.9); transform-origin: right center; flex-shrink: 0;">
                     <input type="checkbox" id="enableTTSToggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px dashed #e5e5ea;">
+                <div style="padding-right: 10px;">
+                    <h4 style="margin: 0;">已备注但无专属音账号提醒</h4>
+                    <p style="margin: 4px 0 0; font-size: 11px; color: var(--text-sec); line-height: 1.35;">规则里写了备注/ID，但未绑定专属或自定义铃声时，是否播报</p>
+                </div>
+                <label class="switch" style="flex-shrink: 0;">
+                    <input type="checkbox" id="playMappedGenericToggle" checked>
                     <span class="slider"></span>
                 </label>
             </div>
@@ -793,6 +813,18 @@
                     </div>
                 </div>
             </div>
+            <!-- 播报代币名长度上限（仅影响 TTS 念名，不改冷却/屏蔽匹配） -->
+            <div style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                <div style="flex: 1; min-width: 0;">
+                    <span style="font-size: 12px; color: var(--text-sec); display: block;">播报代币名最长</span>
+                    <span style="font-size: 10px; color: var(--text-sec); opacity: 0.85;">超出部分截断，默认 15 字</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                    <input type="number" id="walletMaxTokenNameLen" min="1" max="80" step="1" value="15"
+                        style="width: 64px; padding: 4px 8px; border: 1px solid #d2d2d7; border-radius: 6px; background: transparent; color: var(--text-main); font-size: 12px; box-sizing: border-box; text-align: center;">
+                    <span style="font-size: 11px; color: var(--text-sec);">字符</span>
+                </div>
+            </div>
             <!-- 屏蔽代币名：精确匹配，买卖统一不播 -->
             <div style="margin-bottom: 12px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
@@ -853,12 +885,16 @@
             <div style="font-size: 11px; color: #ff9500; padding: 0 4px; line-height: 1.4;">
                 * 注意：实际播报音量受 GMGN 网页所在标签页系统音量影响，请确保未将网页静音。
             </div>
+            <div style="margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                <span style="font-size: 12px; color: var(--text-sec);">当前版本 <b id="appVersionLabel" style="color: var(--text-main);">—</b></span>
+                <button type="button" id="showUpdateNotesBtn" class="outline" style="font-size: 12px; padding: 6px 10px; white-space: nowrap;">查看更新说明</button>
+            </div>
         </div>
 
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <span style="font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 4px;">🐦 推特监控</span>
-                <label class="switch" style="transform: scale(0.9);">
+                <label class="switch">
                     <input type="checkbox" id="enableTwitterToggle" checked>
                     <span class="slider"></span>
                 </label>
@@ -881,11 +917,7 @@
                 </div>
                 <div style="display: flex; gap: 8px;">
                     <select id="twitterTtsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
-                        <option value="+0%">语速: 正常</option>
-                        <option value="+15%">语速: 较快</option>
-                        <option value="+30%">语速: 极速</option>
-                        <option value="+50%">语速: 起飞</option>
-                        <option value="+75%">语速: 闪电</option>
+                        <option value="+75%" selected>语速: 闪电</option>
                     </select>
                     <select id="twitterTtsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
                         <option value="-5%">音调: 偏低</option>
@@ -899,7 +931,7 @@
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <span style="font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 4px;">💰 钱包监控</span>
-                <label class="switch" style="transform: scale(0.9);">
+                <label class="switch">
                     <input type="checkbox" id="enableWalletToggle" checked>
                     <span class="slider"></span>
                 </label>
@@ -922,11 +954,7 @@
                 </div>
                 <div style="display: flex; gap: 8px;">
                     <select id="walletTtsRateSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
-                        <option value="+0%">语速: 正常</option>
-                        <option value="+15%">语速: 较快</option>
-                        <option value="+30%">语速: 极速</option>
-                        <option value="+50%">语速: 起飞</option>
-                        <option value="+75%">语速: 闪电</option>
+                        <option value="+75%" selected>语速: 闪电</option>
                     </select>
                     <select id="walletTtsPitchSelect" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #d2d2d7; font-size: 12px; background: transparent; color: var(--text-main); outline: none;">
                         <option value="-5%">音调: 偏低</option>
@@ -994,6 +1022,18 @@
             <div class="modal-actions">
                 <button id="cancelWalletEditBtn" class="outline">取消</button>
                 <button id="saveWalletEditBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 更新说明弹窗（z-index 高于其它 modal） -->
+    <div class="modal-overlay" id="updateNoticeModal" style="display: none; z-index: 2000;">
+        <div class="modal" style="max-width: 320px; width: 92%;">
+            <h3 id="updateNoticeTitle" style="margin-top: 0;">🍉 更新说明</h3>
+            <p id="updateNoticeSub" style="margin: 0 0 10px; font-size: 12px; color: var(--text-sec);"></p>
+            <div id="updateNoticeBody" style="font-size: 13px; color: var(--text-main); line-height: 1.55; max-height: 280px; overflow-y: auto; margin-bottom: 14px;"></div>
+            <div class="modal-actions">
+                <button id="updateNoticeOkBtn" style="width: 100%;">知道了</button>
             </div>
         </div>
     </div>

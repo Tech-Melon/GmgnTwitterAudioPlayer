@@ -2,6 +2,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // ☁️ Cloudflare Edge-TTS Worker API 统一入口
     const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
 
+    // 唯一语速档：闪电（旧档位全部废弃并迁移至此）
+    const TTS_RATE_LIGHTNING = '+75%';
+
+    // 当前扩展版本（以 manifest 为准）
+    const APP_VERSION = (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '0.0.0';
+
+    /**
+     * 打开更新说明新标签页（与安装/升级时同一页面）
+     */
+    function openUpdateNotesTab(opts = {}) {
+        const ver = opts.version || APP_VERSION;
+        const qs = new URLSearchParams({ v: ver, reason: opts.reason || 'manual' });
+        const url = chrome.runtime.getURL(`update.html?${qs.toString()}`);
+        chrome.tabs.create({ url, active: true });
+    }
+
     // 极简 HTML 转义工具
     const escapeHTML = (str) => String(str).replace(/[&<>'"]/g,
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
@@ -131,8 +147,16 @@ document.addEventListener('DOMContentLoaded', () => {
         masterToggle: document.getElementById('masterToggle'),
         enableTwitterToggle: document.getElementById('enableTwitterToggle'),
         enableWalletToggle: document.getElementById('enableWalletToggle'),
-        playDefaultToggle: document.getElementById('playDefaultToggle'), // 🌟 新增的未映射播放开关
-        enableTTSToggle: document.getElementById('enableTTSToggle'), // 🌟 新增的 TTS 开关
+        playDefaultToggle: document.getElementById('playDefaultToggle'), // 未配置规则提醒
+        enableTTSToggle: document.getElementById('enableTTSToggle'), // TTS 开关
+        playMappedGenericToggle: document.getElementById('playMappedGenericToggle'), // 已备注无专属音
+        updateNoticeModal: document.getElementById('updateNoticeModal'),
+        updateNoticeTitle: document.getElementById('updateNoticeTitle'),
+        updateNoticeSub: document.getElementById('updateNoticeSub'),
+        updateNoticeBody: document.getElementById('updateNoticeBody'),
+        updateNoticeOkBtn: document.getElementById('updateNoticeOkBtn'),
+        showUpdateNotesBtn: document.getElementById('showUpdateNotesBtn'),
+        appVersionLabel: document.getElementById('appVersionLabel'),
         wsBlockDetails: document.getElementById('wsBlockDetails'),
         wsBlockBadge: document.getElementById('wsBlockBadge'),
         wsBlockChevron: document.getElementById('wsBlockChevron'),
@@ -215,6 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
         blockedTokenAddBtn: document.getElementById('blockedTokenAddBtn'),
         blockedTokenList: document.getElementById('blockedTokenList'),
         blockedTokenBadge: document.getElementById('blockedTokenBadge'),
+        walletMaxTokenNameLen: document.getElementById('walletMaxTokenNameLen'),
         walletDictInput: document.getElementById('walletDictInput'),
         importWalletDictBtn: document.getElementById('importWalletDictBtn'),
         clearWalletDictBtn: document.getElementById('clearWalletDictBtn'),
@@ -373,8 +398,9 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.get([
             'twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'enableTwitter', 'enableWallet',
             'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped',
-            'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts',
-            'walletFilters', 'walletDictionary', 'blockedWsChannels'
+            'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts',
+            'walletFilters', 'walletDictionary', 'blockedWsChannels', 'updateNotice',
+            'lastAcknowledgedVersion', 'lastChangelogTabVersion'
         ], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
@@ -387,6 +413,14 @@ document.addEventListener('DOMContentLoaded', () => {
             els.enableWalletToggle.checked = result.enableWallet !== false;
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
+            if (els.playMappedGenericToggle) {
+                els.playMappedGenericToggle.checked = result.playMappedGeneric !== false;
+            }
+
+            if (els.appVersionLabel) els.appVersionLabel.textContent = `v${APP_VERSION}`;
+
+            // 更新说明：版本未确认 或 storage 标记 needShow → 自动弹窗
+            checkAndShowUpdateNotice(result);
 
             blockedWsChannels = Array.isArray(result.blockedWsChannels) ? result.blockedWsChannels.slice() : [];
             renderWsBlockUI();
@@ -401,38 +435,41 @@ document.addEventListener('DOMContentLoaded', () => {
             els.walletVolume.value = wVol;
             els.walletVolumePercent.textContent = Math.round(wVol * 100) + '%';
 
-            // 🌟 迁移和初始化 TTS 设置
+            // 🌟 迁移和初始化 TTS 设置（语速强制闪电）
             const oldTts = {
                 voice: result.ttsVoice || 'zh-CN-XiaoxiaoNeural',
-                rate: result.ttsRate || '+0%',
+                rate: TTS_RATE_LIGHTNING,
                 pitch: result.ttsPitch || '+0%'
             };
 
             const twitterTts = result.twitterTts || oldTts;
             const walletTts = result.walletTts || oldTts;
 
-            // 适配旧版语速
-            const normalizeRate = (r) => {
-                if (r === '1.0' || r === '1') return '+0%';
-                if (r === '0.9' || r === '-10%') return '+0%'; // "稍慢"选项已废弃，统一降级为正常
-                if (r === '1.15') return '+15%';
-                if (r === '1.3') return '+30%';
-                return r;
-            };
             const normalizePitch = (p) => {
                 if (p === '0Hz' || p === '0') return '+0%';
                 if (p === '-20Hz') return '-5%';
                 if (p === '+20Hz') return '+5%';
-                return p;
+                return p || '+0%';
             };
 
-            els.twitterTtsVoiceSelect.value = twitterTts.voice;
-            els.twitterTtsRateSelect.value = normalizeRate(twitterTts.rate);
+            els.twitterTtsVoiceSelect.value = twitterTts.voice || 'zh-CN-XiaoxiaoNeural';
+            els.twitterTtsRateSelect.value = TTS_RATE_LIGHTNING;
             els.twitterTtsPitchSelect.value = normalizePitch(twitterTts.pitch);
 
-            els.walletTtsVoiceSelect.value = walletTts.voice;
-            els.walletTtsRateSelect.value = normalizeRate(walletTts.rate);
+            els.walletTtsVoiceSelect.value = walletTts.voice || 'zh-CN-XiaoxiaoNeural';
+            els.walletTtsRateSelect.value = TTS_RATE_LIGHTNING;
             els.walletTtsPitchSelect.value = normalizePitch(walletTts.pitch);
+
+            // 若存储里仍是旧语速，写回闪电
+            const needRateMigrate =
+                (twitterTts.rate && twitterTts.rate !== TTS_RATE_LIGHTNING) ||
+                (walletTts.rate && walletTts.rate !== TTS_RATE_LIGHTNING);
+            if (needRateMigrate) {
+                chrome.storage.local.set({
+                    twitterTts: { ...twitterTts, rate: TTS_RATE_LIGHTNING },
+                    walletTts: { ...walletTts, rate: TTS_RATE_LIGHTNING }
+                });
+            }
 
             // 🌟 联动子集 UI：如果总开关关闭，则把子开关置灰并禁用
             const ttsSubSetting = document.getElementById('ttsSubSetting');
@@ -480,6 +517,12 @@ document.addEventListener('DOMContentLoaded', () => {
             els.walletMaxMcap.value = walletFilters.maxMcap || '';
             els.walletMinAge.value = walletFilters.minAge || '';
             els.walletMaxAge.value = walletFilters.maxAge || '';
+            if (els.walletMaxTokenNameLen) {
+                const maxLen = parseInt(walletFilters.maxTokenNameLen, 10);
+                els.walletMaxTokenNameLen.value = (Number.isFinite(maxLen) && maxLen > 0)
+                    ? Math.min(80, Math.max(1, maxLen))
+                    : 15;
+            }
             // 🚫 屏蔽代币名（精确匹配，买卖统一）
             blockedTokenSymbols = Array.isArray(walletFilters.blockedTokenSymbols)
                 ? walletFilters.blockedTokenSymbols.slice()
@@ -648,26 +691,33 @@ document.addEventListener('DOMContentLoaded', () => {
                         let ttsText = '';
 
                         if (audioId.startsWith('custom_')) {
-                            // 自定义音频：只播放，不 TTS
+                            // 自定义专属铃：只播文件，不走 TTS
                             if (customAudios[audioId]) {
                                 audioSrc = typeof customAudios[audioId] === 'string' ? customAudios[audioId] : customAudios[audioId].data;
                             } else {
-                                showToast('音频文件丢失，播放默认音');
-                                audioSrc = chrome.runtime.getURL('sounds/default.MP3');
+                                // 文件丢失：与线上一致，走 TTS（关 TTS 时 ding）
+                                showToast('音频文件丢失，降级试听 TTS');
+                                needsTTS = els.enableTTSToggle.checked;
+                                if (needsTTS) {
+                                    ttsText = `${remark || twitterId} 发推啦`;
+                                    audioSrc = null;
+                                } else {
+                                    audioSrc = chrome.runtime.getURL('sounds/default.MP3');
+                                }
                             }
                         } else {
-                            // 内置音频
-                            audioSrc = chrome.runtime.getURL(`sounds/${audioId}`);
-
-                            // 🔥 关键修复：只有通用提示音才需要 TTS，人物专属音频不需要
-                            // 🌟 新增：检查全局 TTS 开关（使用 els.enableTTSToggle 直接读取当前状态）
+                            // 内置：通用音 → TTS；人物专属 → 只播文件
                             const genericSounds = ['default.MP3', 'preset1.MP3'];
-                            if (els.enableTTSToggle.checked && genericSounds.includes(audioId)) {
-                                needsTTS = true;
-                                const speakerName = remark || twitterId;
-                                ttsText = `${speakerName} 发推啦`;
-                                // 🚀 如果启用 TTS，就抛弃默认铃声，纯听 TTS
-                                audioSrc = null;
+                            if (genericSounds.includes(audioId)) {
+                                if (els.enableTTSToggle.checked) {
+                                    needsTTS = true;
+                                    ttsText = `${remark || twitterId} 发推啦`;
+                                    audioSrc = null;
+                                } else {
+                                    audioSrc = chrome.runtime.getURL(`sounds/${audioId}`);
+                                }
+                            } else {
+                                audioSrc = chrome.runtime.getURL(`sounds/${audioId}`);
                             }
                         }
 
@@ -768,7 +818,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({
             twitterTts: {
                 voice: els.twitterTtsVoiceSelect.value,
-                rate: els.twitterTtsRateSelect.value,
+                rate: TTS_RATE_LIGHTNING,
                 pitch: els.twitterTtsPitchSelect.value
             },
             twitterVolume: parseFloat(els.twitterVolume.value)
@@ -780,7 +830,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({
             walletTts: {
                 voice: els.walletTtsVoiceSelect.value,
-                rate: els.walletTtsRateSelect.value,
+                rate: TTS_RATE_LIGHTNING,
                 pitch: els.walletTtsPitchSelect.value
             },
             walletVolume: parseFloat(els.walletVolume.value)
@@ -965,9 +1015,40 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // [已废弃] 全局音量控制已拆分为 twitterVolume / walletVolume 独立控制，事件已在 saveTwitterConfig / saveWalletConfig 中处理
-    els.masterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ isMasterEnabled: e.target.checked }, () => { showToast(e.target.checked ? '监听已开启' : '监听已暂停'); }); });
-    els.enableTwitterToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableTwitter: e.target.checked }, () => { showToast(e.target.checked ? '推特监控已开启' : '推特监控已关闭'); }); });
-    els.enableWalletToggle.addEventListener('change', (e) => { chrome.storage.local.set({ enableWallet: e.target.checked }, () => { showToast(e.target.checked ? '钱包监控已开启' : '钱包监控已关闭'); }); });
+    // 通道开关：显式写 boolean，并在回调里回读确认（修复“关不掉”的体感/竞态）
+    const persistBoolToggle = (key, checked, onToast) => {
+        const value = checked === true;
+        chrome.storage.local.set({ [key]: value }, () => {
+            if (chrome.runtime.lastError) {
+                showToast('设置保存失败，请重试');
+                console.warn('[GMGN popup] storage set failed', key, chrome.runtime.lastError);
+                return;
+            }
+            chrome.storage.local.get([key], (res) => {
+                const saved = res[key] === true;
+                if (key === 'enableTwitter' && els.enableTwitterToggle) els.enableTwitterToggle.checked = saved;
+                if (key === 'enableWallet' && els.enableWalletToggle) els.enableWalletToggle.checked = saved;
+                if (key === 'isMasterEnabled' && els.masterToggle) els.masterToggle.checked = saved;
+                if (typeof onToast === 'function') onToast(saved);
+            });
+        });
+    };
+
+    els.masterToggle.addEventListener('change', (e) => {
+        persistBoolToggle('isMasterEnabled', e.target.checked, (on) => {
+            showToast(on ? '监听已开启' : '监听已暂停');
+        });
+    });
+    els.enableTwitterToggle.addEventListener('change', (e) => {
+        persistBoolToggle('enableTwitter', e.target.checked, (on) => {
+            showToast(on ? '推特监控已开启' : '推特监控已关闭');
+        });
+    });
+    els.enableWalletToggle.addEventListener('change', (e) => {
+        persistBoolToggle('enableWallet', e.target.checked, (on) => {
+            showToast(on ? '钱包监控已开启' : '钱包监控已关闭');
+        });
+    });
 
     // WSS 频道屏蔽：折叠箭头 + 预设勾选 / 自定义添加 / 删除
     if (els.wsBlockDetails) {
@@ -1018,7 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     els.playDefaultToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
-            showToast(e.target.checked ? '已开启默认音频' : '已关闭默认音频');
+            showToast(e.target.checked ? '已开启未配置规则提醒' : '已关闭未配置规则提醒');
 
             // 🌟 联动子集 UI
             const ttsSubSetting = document.getElementById('ttsSubSetting');
@@ -1030,9 +1111,53 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     els.enableTTSToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ enableTTS: e.target.checked }, () => {
-            showToast(e.target.checked ? '已开启语音播报' : '已关闭语音播报');
+            showToast(e.target.checked ? '已开启 AI 念昵称（默认 TTS）' : '已关闭 TTS，将播 default 提示音');
         });
     });
+    if (els.playMappedGenericToggle) {
+        els.playMappedGenericToggle.addEventListener('change', (e) => {
+            chrome.storage.local.set({ playMappedGeneric: e.target.checked === true }, () => {
+                showToast(e.target.checked ? '已开启：备注账号(无专属音)提醒' : '已关闭：备注账号(无专属音)静默');
+            });
+        });
+    }
+
+    /**
+     * 新版本时：优先由 background 打开标签页；
+     * 若未打开过（SW 休眠等），打开 popup 时补开一次。
+     */
+    function checkAndShowUpdateNotice(storageResult) {
+        const result = storageResult || {};
+        const notice = result.updateNotice || {};
+        const ack = result.lastAcknowledgedVersion;
+        const tabOpened = result.lastChangelogTabVersion === APP_VERSION;
+        const versionChanged = ack !== APP_VERSION;
+        const flagged = notice.needShow === true;
+
+        if (!versionChanged && !flagged) {
+            console.log(`[GMGN popup] 更新说明已确认过 v${APP_VERSION}`);
+            return;
+        }
+        if (tabOpened && !flagged) {
+            console.log(`[GMGN popup] 更新说明标签已展示过 v${APP_VERSION}`);
+            return;
+        }
+
+        console.log(`[GMGN popup] 补开更新说明标签页 v${APP_VERSION}`, { versionChanged, flagged, tabOpened });
+        openUpdateNotesTab({ version: APP_VERSION, reason: 'popup_fallback' });
+    }
+
+    if (els.updateNoticeOkBtn) {
+        els.updateNoticeOkBtn.addEventListener('click', () => {
+            if (els.updateNoticeModal) els.updateNoticeModal.style.display = 'none';
+        });
+    }
+
+    if (els.showUpdateNotesBtn) {
+        els.showUpdateNotesBtn.addEventListener('click', () => {
+            openUpdateNotesTab({ version: APP_VERSION, reason: 'manual' });
+        });
+    }
     els.uploadBtn.addEventListener('click', async () => {
         const files = els.customAudioFile.files;
         if (!files || files.length === 0) return showToast('请先选择音频或 ZIP！');
@@ -1261,6 +1386,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 maxMcap: parseFloat(els.walletMaxMcap.value) || 0,
                 minAge: parseFloat(els.walletMinAge.value) || 0,
                 maxAge: parseFloat(els.walletMaxAge.value) || 0,
+                // 播报代币名最长字符数（默认 15）
+                maxTokenNameLen: (() => {
+                    const n = parseInt(els.walletMaxTokenNameLen && els.walletMaxTokenNameLen.value, 10);
+                    if (!Number.isFinite(n) || n <= 0) return 15;
+                    return Math.min(80, Math.max(1, n));
+                })(),
                 // 🚫 屏蔽代币名（精确匹配，保留展示大小写）
                 blockedTokenSymbols: blockedTokenSymbols.slice()
             }
@@ -1333,6 +1464,14 @@ document.addEventListener('DOMContentLoaded', () => {
     els.walletMaxMcap.addEventListener('change', saveWalletFilters);
     els.walletMinAge.addEventListener('change', saveWalletFilters);
     els.walletMaxAge.addEventListener('change', saveWalletFilters);
+    if (els.walletMaxTokenNameLen) {
+        els.walletMaxTokenNameLen.addEventListener('change', () => {
+            const n = parseInt(els.walletMaxTokenNameLen.value, 10);
+            if (!Number.isFinite(n) || n < 1) els.walletMaxTokenNameLen.value = 15;
+            else if (n > 80) els.walletMaxTokenNameLen.value = 80;
+            saveWalletFilters(`代币名最长 ${els.walletMaxTokenNameLen.value} 字`);
+        });
+    }
 
     // 🚫 屏蔽代币名：添加 / 删除 / 回车
     if (els.blockedTokenAddBtn) {
