@@ -2,8 +2,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // ☁️ Cloudflare Edge-TTS Worker API 统一入口
     const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
 
-    // 唯一语速档：闪电（旧档位全部废弃并迁移至此）
-    const TTS_RATE_LIGHTNING = '+75%';
+    // 语速三档：较快 / 极快 / 闪电（Edge-TTS prosody rate）
+    const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
+    const TTS_RATE_DEFAULT = '+75%'; // 闪电
+
+    /** 将任意旧档位映射到三档之一 */
+    const normalizeRate = (rate) => {
+        if (TTS_RATE_OPTIONS.includes(rate)) return rate;
+        // 旧五档兼容：正常/较快/极速/起飞/闪电
+        const legacyMap = {
+            '+0%': '+15%',
+            '+15%': '+15%',
+            '+30%': '+50%',
+            '+40%': '+50%',
+            '+45%': '+50%',
+            '+50%': '+50%',
+            '+75%': '+75%'
+        };
+        return legacyMap[rate] || TTS_RATE_DEFAULT;
+    };
 
     // 当前扩展版本（以 manifest 为准）
     const APP_VERSION = (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '0.0.0';
@@ -435,10 +452,10 @@ document.addEventListener('DOMContentLoaded', () => {
             els.walletVolume.value = wVol;
             els.walletVolumePercent.textContent = Math.round(wVol * 100) + '%';
 
-            // 🌟 迁移和初始化 TTS 设置（语速强制闪电）
+            // 🌟 迁移和初始化 TTS 设置（语速三档：较快 / 极快 / 闪电）
             const oldTts = {
                 voice: result.ttsVoice || 'zh-CN-XiaoxiaoNeural',
-                rate: TTS_RATE_LIGHTNING,
+                rate: normalizeRate(result.ttsRate || TTS_RATE_DEFAULT),
                 pitch: result.ttsPitch || '+0%'
             };
 
@@ -452,22 +469,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 return p || '+0%';
             };
 
+            const twitterRate = normalizeRate(twitterTts.rate);
+            const walletRate = normalizeRate(walletTts.rate);
+
             els.twitterTtsVoiceSelect.value = twitterTts.voice || 'zh-CN-XiaoxiaoNeural';
-            els.twitterTtsRateSelect.value = TTS_RATE_LIGHTNING;
+            els.twitterTtsRateSelect.value = twitterRate;
             els.twitterTtsPitchSelect.value = normalizePitch(twitterTts.pitch);
 
             els.walletTtsVoiceSelect.value = walletTts.voice || 'zh-CN-XiaoxiaoNeural';
-            els.walletTtsRateSelect.value = TTS_RATE_LIGHTNING;
+            els.walletTtsRateSelect.value = walletRate;
             els.walletTtsPitchSelect.value = normalizePitch(walletTts.pitch);
 
-            // 若存储里仍是旧语速，写回闪电
+            // 旧档位映射到三档后写回，避免下拉无匹配项
             const needRateMigrate =
-                (twitterTts.rate && twitterTts.rate !== TTS_RATE_LIGHTNING) ||
-                (walletTts.rate && walletTts.rate !== TTS_RATE_LIGHTNING);
+                (twitterTts.rate && twitterTts.rate !== twitterRate) ||
+                (walletTts.rate && walletTts.rate !== walletRate);
             if (needRateMigrate) {
                 chrome.storage.local.set({
-                    twitterTts: { ...twitterTts, rate: TTS_RATE_LIGHTNING },
-                    walletTts: { ...walletTts, rate: TTS_RATE_LIGHTNING }
+                    twitterTts: { ...twitterTts, rate: twitterRate },
+                    walletTts: { ...walletTts, rate: walletRate }
                 });
             }
 
@@ -818,7 +838,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({
             twitterTts: {
                 voice: els.twitterTtsVoiceSelect.value,
-                rate: TTS_RATE_LIGHTNING,
+                rate: normalizeRate(els.twitterTtsRateSelect.value),
                 pitch: els.twitterTtsPitchSelect.value
             },
             twitterVolume: parseFloat(els.twitterVolume.value)
@@ -830,7 +850,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({
             walletTts: {
                 voice: els.walletTtsVoiceSelect.value,
-                rate: TTS_RATE_LIGHTNING,
+                rate: normalizeRate(els.walletTtsRateSelect.value),
                 pitch: els.walletTtsPitchSelect.value
             },
             walletVolume: parseFloat(els.walletVolume.value)

@@ -581,19 +581,35 @@ setTimeout(() => {
 // 🌟 新增：配置你的 Cloudflare Worker TTS API 节点
 // 部署教程参考：https://github.com/DIYgod/cloudflare-edge-tts
 const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev";
-// 语速唯一档：闪电（旧档位全部迁移）
-const TTS_RATE_LIGHTNING = '+75%';
+// 语速三档：较快 / 极快 / 闪电
+const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
+const TTS_RATE_DEFAULT = '+75%'; // 闪电
 
-/** 规范化 TTS 配置，强制语速为闪电 */
+/** 将任意旧档位映射到三档之一 */
+function normalizeRate(rate) {
+    if (TTS_RATE_OPTIONS.includes(rate)) return rate;
+    const legacyMap = {
+        '+0%': '+15%',
+        '+15%': '+15%',
+        '+30%': '+50%',
+        '+40%': '+50%',
+        '+45%': '+50%',
+        '+50%': '+50%',
+        '+75%': '+75%'
+    };
+    return legacyMap[rate] || TTS_RATE_DEFAULT;
+}
+
+/** 规范化 TTS 配置（语速限制在三档内） */
 function normalizeTtsConfig(tts, legacyResult) {
     const base = tts || {
         voice: (legacyResult && legacyResult.ttsVoice) || 'zh-CN-XiaoxiaoNeural',
-        rate: TTS_RATE_LIGHTNING,
+        rate: normalizeRate((legacyResult && legacyResult.ttsRate) || TTS_RATE_DEFAULT),
         pitch: (legacyResult && legacyResult.ttsPitch) || '+0%'
     };
     return {
         voice: base.voice || 'zh-CN-XiaoxiaoNeural',
-        rate: TTS_RATE_LIGHTNING,
+        rate: normalizeRate(base.rate),
         pitch: base.pitch || '+0%'
     };
 }
@@ -979,7 +995,7 @@ function prefetchTTSToCache(textOrItems, source = 'twitter') {
 
     const ttsConfig = source === 'wallet' ? (configCache.walletTts || {}) : (configCache.twitterTts || {});
     const voice = ttsConfig.voice || 'zh-CN-XiaoxiaoNeural';
-    const rate = ttsConfig.rate || '+0%';
+    const rate = normalizeRate(ttsConfig.rate);
     const pitch = ttsConfig.pitch || '+0%';
 
     // 并行预热所有片段（fire-and-forget，不阻塞主流程）
@@ -1936,7 +1952,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     const migrationWrites = {};  // 需要写入的新字段
     const migrationDeletes = []; // 需要清除的旧字段
 
-    // 1️⃣ TTS 配置迁移：旧版 ttsVoice/ttsRate/ttsPitch → 新版 twitterTts/walletTts（语速强制闪电）
+    // 1️⃣ TTS 配置迁移：旧版 ttsVoice/ttsRate/ttsPitch → 新版 twitterTts/walletTts
     if (!result.twitterTts && (result.ttsVoice || result.ttsRate || result.ttsPitch)) {
         const migrated = normalizeTtsConfig(null, result);
         configCache.twitterTts = migrated;
@@ -1946,15 +1962,19 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
         migrationDeletes.push('ttsVoice', 'ttsRate', 'ttsPitch');
         console.log("🔄 [GMGN 盯盘伴侣 - 迁移] TTS 配置已从旧版迁移:", migrated);
     } else {
-        // 强制语速闪电：旧档位一律废弃
+        // 语速规范化到三档（较快/极快/闪电），保留用户已选档位
         const tNorm = normalizeTtsConfig(result.twitterTts, result);
         const wNorm = normalizeTtsConfig(result.walletTts, result);
-        if (!result.twitterTts || (result.twitterTts && result.twitterTts.rate !== TTS_RATE_LIGHTNING)) {
+        if (!result.twitterTts || (result.twitterTts && result.twitterTts.rate !== tNorm.rate)) {
             migrationWrites.twitterTts = tNorm;
             configCache.twitterTts = tNorm;
+        } else {
+            configCache.twitterTts = tNorm;
         }
-        if (!result.walletTts || (result.walletTts && result.walletTts.rate !== TTS_RATE_LIGHTNING)) {
+        if (!result.walletTts || (result.walletTts && result.walletTts.rate !== wNorm.rate)) {
             migrationWrites.walletTts = wNorm;
+            configCache.walletTts = wNorm;
+        } else {
             configCache.walletTts = wNorm;
         }
     }
@@ -2118,7 +2138,7 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null) 
 
     const ttsConfig = source === 'wallet' ? (configCache.walletTts || {}) : (configCache.twitterTts || {});
     const voice = ttsConfig.voice || 'zh-CN-XiaoxiaoNeural';
-    const rate = ttsConfig.rate || '+0%';
+    const rate = normalizeRate(ttsConfig.rate);
     const pitch = ttsConfig.pitch || '+0%';
 
     const defaultVol = configCache.globalVolume !== undefined ? configCache.globalVolume : 1;

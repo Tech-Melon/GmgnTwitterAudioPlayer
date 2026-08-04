@@ -23,7 +23,7 @@
 ### 🎙️ AI 音色引擎
 - 推特/钱包各自独立的音色、语速、音调、音量控制
 - 4 种中英文音色可选（晓晓 / 云健 / 晓伊 / Ava）
-- 5 档语速：正常 → 较快 → 极速 → 起飞 → 闪电
+- 3 档语速：较快 → 极快 → 闪电
 - 音量最高支持 **150%** 增压（Web Audio API GainNode）
 - 本地 IndexedDB + CDN 边缘双层缓存，高并发推文 0ms 极速发声
 
@@ -95,6 +95,9 @@
 
 ## 📋 更新日志
 
+### 2026.8.4
+- **v1.13.5** — AI 语速恢复三档可选：较快 / 极快 / 闪电（推特、钱包各自独立）
+
 ### 2026.8.3
 - **v1.13.4** — 修复排队消息重放崩溃 + Offscreen 打断 Promise 挂起
 - **v1.13.3** — 修复更新说明页空白（MV3 CSP 外置脚本）
@@ -150,8 +153,30 @@
 
 ---
 
+## 🛡️ 商店「隐私权规范」权限说明（提审粘贴）
+
+Chrome 后台 **隐私权规范** 里若提示必须说明 `offscreen`，可粘贴：
+
+**offscreen（中文，推荐）**  
+本扩展使用 offscreen 权限，仅用于在 GMGN 监控标签页处于后台或浏览器限制页面自动播放时，通过扩展内离屏文档播放用户已开启的推特/钱包提示音与语音播报。不访问、不采集、不上传用户页面内容或个人信息，音频仅在本地播放。
+
+**offscreen（English，若表单要求英文）**  
+The offscreen permission is used solely to play local alert sounds and TTS for Twitter/wallet monitoring when the GMGN tab is in the background or browser autoplay is restricted. It does not access, collect, or upload page content or personal data; audio is played locally only.
+
+其他权限简述（如被问到）：  
+- **storage / unlimitedStorage**：保存用户本地的音频映射、钱包备注与设置，不上传。  
+- **host_permissions (gmgn.ai)**：读取用户打开的 GMGN 页面上的监控数据以触发本地播报。
+
+---
+
 ## 📝 详细商店发布文案 (Store Changelog)
 *(打包脚本 pack.py 会自动提取此段落并打印，方便直接复制到谷歌商店)*
+
+**v1.13.5**
+🎙️ **AI 语速三档可选**
+- 推特 / 钱包 AI 音色设置支持语速：较快、极快、闪电
+- 默认仍为「闪电」；旧五档配置会自动映射到最近的一档
+- 试听与实际播报均按所选语速生效
 
 **v1.13.4**
 ✨ **今日功能汇总（方便用户读懂）**

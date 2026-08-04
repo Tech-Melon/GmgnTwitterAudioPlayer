@@ -1,7 +1,23 @@
 // Service Worker：安装/更新标记 + Offscreen 后台播报中继
 // 注意：MV3 SW 空闲会休眠，扩展页显示「Service Worker (无效)」多数是休眠，不一定是崩溃
 
-const TTS_RATE_LIGHTNING = '+75%';
+// 语速三档：较快 / 极快 / 闪电
+const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
+const TTS_RATE_DEFAULT = '+75%'; // 闪电
+
+function normalizeRate(rate) {
+    if (TTS_RATE_OPTIONS.includes(rate)) return rate;
+    const legacyMap = {
+        '+0%': '+15%',
+        '+15%': '+15%',
+        '+30%': '+50%',
+        '+40%': '+50%',
+        '+45%': '+50%',
+        '+50%': '+50%',
+        '+75%': '+75%'
+    };
+    return legacyMap[rate] || TTS_RATE_DEFAULT;
+}
 const OFFSCREEN_URL = 'offscreen.html';
 let offscreenCreating = null;
 
@@ -107,17 +123,18 @@ chrome.runtime.onInstalled.addListener((details) => {
             console.log('[GMGN 盯盘伴侣] 默认映射规则将初始化');
         }
 
-        const forceLightning = (tts) => ({
+        const normalizeTts = (tts) => ({
             voice: (tts && tts.voice) || 'zh-CN-XiaoxiaoNeural',
-            rate: TTS_RATE_LIGHTNING,
+            rate: normalizeRate(tts && tts.rate),
             pitch: (tts && tts.pitch) || '+0%'
         });
-        const tNorm = forceLightning(result.twitterTts);
-        const wNorm = forceLightning(result.walletTts);
-        if (!result.twitterTts || result.twitterTts.rate !== TTS_RATE_LIGHTNING) {
+        const tNorm = normalizeTts(result.twitterTts);
+        const wNorm = normalizeTts(result.walletTts);
+        // 仅在缺失配置或旧档位需映射时写回，保留用户已选的三档语速
+        if (!result.twitterTts || (result.twitterTts.rate && result.twitterTts.rate !== tNorm.rate)) {
             writes.twitterTts = tNorm;
         }
-        if (!result.walletTts || result.walletTts.rate !== TTS_RATE_LIGHTNING) {
+        if (!result.walletTts || (result.walletTts.rate && result.walletTts.rate !== wNorm.rate)) {
             writes.walletTts = wNorm;
         }
 
