@@ -17,13 +17,14 @@ const LEGACY_TAB_LEADER_ENABLED = false;
 const LEGACY_CROSS_TAB_DEDUP_ENABLED = false;
 const coordinatorScheduledEventIds = new Set();
 const TWITTER_EVENT_TTL_MS = 2 * 60 * 1000;
-const WALLET_EVENT_TTL_MS = 10 * 60 * 1000;
+const WALLET_EVENT_TTL_MS = 6 * 1000;
 const hashMonitorPayload = GmgnWalletEvent.hashPayload;
 const buildWalletEventId = GmgnWalletEvent.buildEventId;
 const buildWalletTransactionKey = GmgnWalletEvent.buildTransactionKey;
 const isWalletTokenBlocked = GmgnWalletEvent.isTokenBlocked;
 const buildWalletSingleSpeechParts = GmgnWalletEvent.buildSingleSpeechParts;
-const buildWalletSpeechGroupParts = GmgnWalletEvent.buildSpeechGroupParts;
+const formatCompactWalletSpeechGroups = GmgnWalletEvent.formatCompactSpeechGroups;
+const splitFreshWalletItems = GmgnWalletEvent.splitFreshItems;
 const playWalletSegmentGroups = GmgnWalletEvent.playProgressiveSegmentGroups;
 const mergePendingWalletSellConfirm = GmgnWalletEvent.mergePendingSellConfirm;
 let diagnosticSequence = 0;
@@ -1316,10 +1317,21 @@ function buildWalletSpeechGroups(items) {
         }
         const key = `${groupAction}_${tokenSymbol}`;
         if (!groups.has(key)) {
-            groups.set(key, { groupAction, tokenSymbol, nameCounts: new Map() });
+            groups.set(key, {
+                groupAction,
+                tokenSymbol,
+                nameCounts: new Map(),
+                itemCount: 0,
+                lastQueuedAt: 0
+            });
         }
         const group = groups.get(key);
         group.nameCounts.set(item.rename, (group.nameCounts.get(item.rename) || 0) + 1);
+        group.itemCount += 1;
+        group.lastQueuedAt = Math.max(
+            group.lastQueuedAt,
+            Number(item._queuedAt) || Number(item.wssReceivedAt) || 0
+        );
     });
     return Array.from(groups.values());
 }
@@ -1336,8 +1348,12 @@ function _buildWalletPrefetchTexts(items) {
         return buildWalletSingleSpeechParts({ ...t, tokenSymbol: sym });
     }
 
-    // 多笔：每组保持「钱包名 + 动作和代币」两段，便于复用缓存并渐进播放。
-    return buildWalletSpeechGroups(validItems).flatMap(buildWalletSpeechGroupParts);
+    // 多笔：合成一个有界摘要，避免每组拆成多个固定时长的音频任务。
+    const summary = formatCompactWalletSpeechGroups(
+        buildWalletSpeechGroups(validItems),
+        validItems.length
+    );
+    return summary ? [summary] : [];
 }
 
 function getWalletCoordinatorEventIds(item) {
@@ -1351,7 +1367,7 @@ function getWalletCoordinatorEventIds(item) {
 // ════════════════════════════════════════════════════════════
 // 👑 首发 0 延时 + 动态批处理合并调度引擎 (Zero-Delay Dynamic Batching)
 //    🔥 排队期间异步预热 TTS → 前面播完后 IDB 直接命中 → 0 延迟播放
-//    🔒 凑够 3 个不同信号源锁定为一批 → 后续新来的进入新批次
+//    推特按博主聚合；钱包突发流量一次吸收并压缩，避免形成串行语音长队。
 // ════════════════════════════════════════════════════════════
 const TwitterBatch = {
     lockedBatches: [],          // 已锁定的批次队列 [{triggers, fingerprints}]
@@ -1460,84 +1476,43 @@ const TwitterBatch = {
 };
 
 const WalletBatch = {
-    lockedBatches: [],          // 已锁定的批次队列 [{items}]
-    pendingItems: [],           // 未锁定的 pending items
-    _pendingDeduped: new Set(), // 去重计数：不同 rename_action_tokenSymbol
+    pendingItems: [],
 
     add(itemData) {
         if (itemData) {
-            itemData._queuedAt = Date.now();
+            if (!itemData._queuedAt) itemData._queuedAt = Date.now();
             this.pendingItems.push(itemData);
-            this._pendingDeduped.add(`${itemData.rename}_${itemData.action}_${itemData.tokenSymbol}`);
         }
-
-        // 🔒 凑够 3 个不同交易事件 → 锁定为一批
-        while (this._pendingDeduped.size >= 3) {
-            this._lockCurrentBatch();
-        }
-        // 🔥 预热当前 pending 的 TTS 文本
         this._prefetchCurrentPending();
     },
 
     /** processed 尚未播放时收到 confirm：合并成一次最终减仓/清仓播报。 */
     mergeSellConfirm(confirmItem) {
         if (!confirmItem || !confirmItem.txStateKey) return false;
-        const batches = [this.pendingItems, ...this.lockedBatches.map((batch) => batch.items)];
-        for (const batch of batches) {
-            const processedItem = batch.find((item) => (
-                item
-                && item.txStateKey === confirmItem.txStateKey
-                && item.action === 'sell'
-                && item.cnt === 'processed'
-            ));
-            if (!processedItem) continue;
-            if (!mergePendingWalletSellConfirm(processedItem, confirmItem)) continue;
-            prefetchTTSToCache(_buildWalletPrefetchTexts(batch), 'wallet');
-            return true;
-        }
-        return false;
-    },
-
-    /** 🔒 取前 3 个不同交易事件锁定为一批 */
-    _lockCurrentBatch() {
-        const batchKeys = new Set();
-        const batchItems = [];
-        const remainingItems = [];
-
-        this.pendingItems.forEach(t => {
-            const key = `${t.rename}_${t.action}_${t.tokenSymbol}`;
-            if (batchKeys.size < 3 || batchKeys.has(key)) {
-                batchKeys.add(key);
-                batchItems.push(t);
-            } else {
-                remainingItems.push(t);
-            }
-        });
-
-        // 🔥 预热锁定批次的最终 TTS
-        const texts = _buildWalletPrefetchTexts(batchItems);
-        prefetchTTSToCache(texts, 'wallet');
-
-        this.lockedBatches.push({ items: batchItems });
-
-        this.pendingItems = remainingItems;
-        this._pendingDeduped.clear();
-        remainingItems.forEach(t => this._pendingDeduped.add(`${t.rename}_${t.action}_${t.tokenSymbol}`));
+        const processedItem = this.pendingItems.find((item) => (
+            item
+            && item.txStateKey === confirmItem.txStateKey
+            && item.action === 'sell'
+            && item.cnt === 'processed'
+        ));
+        if (!processedItem) return false;
+        if (!mergePendingWalletSellConfirm(processedItem, confirmItem)) return false;
+        this._prefetchCurrentPending();
+        return true;
     },
 
     /** 🔥 预热当前未锁定 pending 的 TTS 文本 */
     _prefetchCurrentPending() {
-        if (this.pendingItems.length === 0) return;
+        if (this.pendingItems.length !== 1) return;
         const texts = _buildWalletPrefetchTexts(this.pendingItems);
         prefetchTTSToCache(texts, 'wallet');
     },
 
     hasContent() {
-        return this.lockedBatches.length > 0 || this.pendingItems.length > 0;
+        return this.pendingItems.length > 0;
     },
 
     takeNext() {
-        if (this.lockedBatches.length > 0) return this.lockedBatches.shift();
         if (this.pendingItems.length > 0) {
             const batch = { items: [...this.pendingItems] };
             this.clear();
@@ -1548,13 +1523,13 @@ const WalletBatch = {
 
     clear() {
         this.pendingItems = [];
-        this._pendingDeduped.clear();
     }
 };
 
 const DynamicPlaybackScheduler = {
     _isPlaying: false,
     _safetyTimer: null,
+    _activeKind: null,
 
     /** 🛡️ 启动超时兜底计时器：防止 onComplete 因异常路径未被调用导致调度器永久卡死 */
     _startSafetyTimer() {
@@ -1611,6 +1586,7 @@ const DynamicPlaybackScheduler = {
 
         if (!this._isPlaying) {
             this._isPlaying = true;
+            this._activeKind = 'twitter';
             this._startSafetyTimer();
             playTwitterDirectly(ttsTriggers, fingerprint ? [fingerprint] : []);
         } else {
@@ -1633,6 +1609,7 @@ const DynamicPlaybackScheduler = {
         });
         if (!this._isPlaying) {
             this._isPlaying = true;
+            this._activeKind = 'wallet';
             this._startSafetyTimer();
             playWalletDirectly([itemData]);
         } else {
@@ -1643,14 +1620,27 @@ const DynamicPlaybackScheduler = {
 
     /** TTS 通道播完，解锁并调度下一批（专属铃不经过此锁） */
     releaseAndNext() {
+        const completedKind = this._activeKind;
         this._isPlaying = false;
+        this._activeKind = null;
         if (this._safetyTimer) {
             clearTimeout(this._safetyTimer);
             this._safetyTimer = null;
         }
 
-        if (TwitterBatch.hasContent()) {
+        const hasTwitter = TwitterBatch.hasContent();
+        const hasWallet = WalletBatch.hasContent();
+        const playWalletNext = hasWallet && (!hasTwitter || completedKind === 'twitter');
+
+        if (playWalletNext) {
             this._isPlaying = true;
+            this._activeKind = 'wallet';
+            this._startSafetyTimer();
+            const batch = WalletBatch.takeNext();
+            playWalletDirectly(batch.items);
+        } else if (hasTwitter) {
+            this._isPlaying = true;
+            this._activeKind = 'twitter';
             this._startSafetyTimer();
             const batch = TwitterBatch.takeNext();
             const ttsTriggers = filterTwitterTtsTriggers(batch.triggers);
@@ -1666,11 +1656,6 @@ const DynamicPlaybackScheduler = {
                 return;
             }
             playTwitterDirectly(ttsTriggers, coordinatorEventIds);
-        } else if (WalletBatch.hasContent()) {
-            this._isPlaying = true;
-            this._startSafetyTimer();
-            const batch = WalletBatch.takeNext();
-            playWalletDirectly(batch.items);
         }
     }
 };
@@ -3169,27 +3154,27 @@ function playWalletDirectly(list) {
     // 🔒 二次校验：调度器排队期间，其他 Tab 可能已经播放了此事件
     const dedupedList = list.filter(item => !item.walletFingerprint || !wasPlayedByOtherTab(item.walletFingerprint));
 
-    // 👑 1. TTL 过滤：钱包事件保留 10 分钟，避免突发批次因排队直接漏播
-    const validItems = dedupedList.filter(item => (now - (item._queuedAt || now)) < WALLET_EVENT_TTL_MS);
+    // 实时优先：超过新鲜度上限的事件保留在日志中，但不再占用语音队列。
+    const freshness = splitFreshWalletItems(dedupedList, now, WALLET_EVENT_TTL_MS);
+    const validItems = freshness.fresh;
+    const staleCount = freshness.stale.length;
+    if (staleCount > 0) {
+        diagnosticLog('scheduler_stale_dropped', {
+            source: 'wallet',
+            eventIds: coordinatorEventIds,
+            staleCount,
+            maxAgeMs: WALLET_EVENT_TTL_MS
+        });
+        debugLog(`⏭️ [GMGN 盯盘伴侣] 丢弃 ${staleCount} 笔超过 ${WALLET_EVENT_TTL_MS / 1000}s 的旧钱包语音`);
+    }
     if (validItems.length === 0) {
         onComplete();
         return;
     }
 
-    // 👑 2. 超载截断分批：超过 5 笔时截取前 5 笔本轮播报，剩余放回 Batch 下一轮自动消费
-    const WALLET_MAX_BATCH = 5;
-    let currentItems = validItems;
-    if (validItems.length > WALLET_MAX_BATCH) {
-        currentItems = validItems.slice(0, WALLET_MAX_BATCH);
-        const remaining = validItems.slice(WALLET_MAX_BATCH);
-        const remainingEventIds = new Set(
-            remaining.flatMap(getWalletCoordinatorEventIds)
-        );
-        coordinatorEventIds = coordinatorEventIds.filter((eventId) => !remainingEventIds.has(eventId));
-        debugLog(`✂️ [GMGN 盯盘伴侣] 钱包截断分批：本轮 ${currentItems.length} 笔，剩余 ${remaining.length} 笔放回队列`);
-        remaining.forEach(item => WalletBatch.add(item));
-    }
-    playbackItems = currentItems;
+    const currentItems = validItems;
+    // 整批事件都需要结算状态；只有 currentItems 会进入实际语音。
+    playbackItems = list;
 
     const currentReceivedTimes = currentItems
         .map((item) => Number(item && item.wssReceivedAt))
@@ -3201,17 +3186,6 @@ function playWalletDirectly(list) {
     walletDiagnostic.wssToProcessingMs = now - walletDiagnostic.wssReceivedAt;
     walletDiagnostic.tokens = currentItems.map((item) => item && item.tokenSymbol).filter(Boolean);
     walletDiagnostic.walletStages = currentItems.map((item) => item && item.cnt).filter(Boolean);
-
-    // 👑 3. 超载概括播报：超过 3 笔时精确概括人名、笔数和操作
-    if (currentItems.length > 3) {
-        debugLog(`🚨 [GMGN 盯盘伴侣] 钱包消息积压超载 (${currentItems.length} 笔交易)，启动弹性概括播报`);
-        const walletOverloadSegments = buildWalletSpeechGroups(currentItems).flatMap(buildWalletSpeechGroupParts);
-        const walletOverloadText = walletOverloadSegments.join('，');
-        debugLog(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包超载概括: "${walletOverloadText}"`);
-        playNetworkTTS(walletOverloadSegments, 'wallet', onComplete, walletDiagnostic);
-        playShortBeep('wallet');
-        return;
-    }
 
     // 🌟 降级处理：只有一笔待播，完美兼容原先单发逻辑
     if (currentItems.length === 1) {
@@ -3239,10 +3213,13 @@ function playWalletDirectly(list) {
         return;
     }
 
-    // 🌟 高级处理：多笔钱包交易合并汇总 AI 连读
-    const finalTtsSegments = buildWalletSpeechGroups(currentItems).flatMap(buildWalletSpeechGroupParts);
-    debugLog("🔊 [GMGN 盯盘伴侣 - 钱包动态批处理] 智能连读汇总播报:", finalTtsSegments.join(' → '));
-    playNetworkTTS(finalTtsSegments, 'wallet', onComplete, walletDiagnostic);
+    // 多笔积压只生成一个有界摘要音频，保证输入洪峰不会线性放大播放时长。
+    const summaryText = formatCompactWalletSpeechGroups(
+        buildWalletSpeechGroups(currentItems),
+        currentItems.length
+    );
+    debugLog(`🔊 [GMGN 盯盘伴侣 - 钱包动态批处理] ${currentItems.length} 笔压缩播报: "${summaryText}"`);
+    playNetworkTTS(summaryText, 'wallet', onComplete, walletDiagnostic);
 }
 
 async function handleWalletMsg(e) {
@@ -3251,6 +3228,8 @@ async function handleWalletMsg(e) {
     const wssReceivedAt = envelope.wssReceivedAt;
     if (!e || e.__gmgnCoordinated !== true) {
         if (!item) return;
+        // 高频 transferOut/transferIn/callOut 等与播报无关，不写日志也不进入 Background 串行链。
+        if (item.s !== 'buy' && item.s !== 'sell') return;
         const eventId = buildWalletEventId(item);
         diagnosticLog('wallet_wss_received', {
             source: 'wallet',

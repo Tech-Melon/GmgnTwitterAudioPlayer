@@ -149,6 +149,22 @@ function rememberTwitterSemantic(msg, now = Date.now()) {
     }
 }
 
+function isActionableMonitorEvent(kind, payload) {
+    if (kind !== 'wallet') return true;
+    const action = payload && payload.item && payload.item.s;
+    return action === 'buy' || action === 'sell';
+}
+
+function pruneIgnoredPendingWalletEvents() {
+    let removed = 0;
+    for (const [eventId, record] of eventCoordinator.pending) {
+        if (isActionableMonitorEvent(record && record.kind, record && record.payload)) continue;
+        eventCoordinator.removePending(eventId);
+        removed += 1;
+    }
+    return removed;
+}
+
 function storageSessionGet(key) {
     return new Promise((resolve) => {
         if (!chrome.storage.session) {
@@ -177,6 +193,10 @@ function storageSessionSet(value) {
 
 const coordinatorReady = storageSessionGet(COORDINATOR_STORAGE_KEY).then((result) => {
     eventCoordinator.restore(result[COORDINATOR_STORAGE_KEY]);
+    if (pruneIgnoredPendingWalletEvents() > 0) {
+        return storageSessionSet({ [COORDINATOR_STORAGE_KEY]: eventCoordinator.snapshot() });
+    }
+    return undefined;
 });
 
 function flushCoordinatorState() {
@@ -257,6 +277,9 @@ async function routeMonitorEvent(msg, sender) {
     if (!source) return { ok: false, error: 'invalid_sender' };
     if (!msg.eventId || (msg.kind !== 'twitter' && msg.kind !== 'wallet')) {
         return { ok: false, error: 'invalid_event' };
+    }
+    if (!isActionableMonitorEvent(msg.kind, msg.payload)) {
+        return { ok: true, ignored: true };
     }
     if (eventCoordinator.isCompleted(msg.eventId, msg.kind)) {
         return { ok: true, duplicate: true };
@@ -610,6 +633,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === 'GMGN_INGEST_EVENT') {
+        if (!isActionableMonitorEvent(msg.kind, msg.payload)) {
+            sendResponse({ ok: true, ignored: true });
+            return false;
+        }
         const task = ingestChain.then(() => routeMonitorEvent(msg, sender));
         ingestChain = task.catch((error) => {
             console.warn('[GMGN 盯盘伴侣] 事件协调异常:', error);

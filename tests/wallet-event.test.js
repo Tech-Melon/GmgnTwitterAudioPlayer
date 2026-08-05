@@ -8,6 +8,8 @@ const {
     buildSingleSpeechParts,
     buildSpeechGroupParts,
     formatSpeechGroup,
+    formatCompactSpeechGroups,
+    splitFreshItems,
     playResolvedSegmentsInOrder,
     playProgressiveSegmentGroups,
     mergePendingSellConfirm
@@ -109,6 +111,51 @@ test('grouped sell fallback retains each token symbol', () => {
         tokenSymbol: 'RGERG',
         nameCounts: new Map([['聪明钱', 2]])
     }), ['聪明钱2笔', '减仓RGERG']);
+});
+
+test('wallet burst summary is bounded to recent groups and names', () => {
+    const speech = formatCompactSpeechGroups([
+        {
+            groupAction: 'buy',
+            tokenSymbol: 'OLD',
+            nameCounts: new Map([['旧钱包', 2]]),
+            itemCount: 2,
+            lastQueuedAt: 100
+        },
+        {
+            groupAction: 'sellReduce',
+            tokenSymbol: 'CHIP',
+            nameCounts: new Map([
+                ['阿峰', 3],
+                ['狗头', 2],
+                ['蚂蚁仓', 1],
+                ['鸡Crazy', 1]
+            ]),
+            itemCount: 7,
+            lastQueuedAt: 400
+        },
+        {
+            groupAction: 'buy',
+            tokenSymbol: 'NEW',
+            nameCounts: new Map([['聪明钱', 1]]),
+            itemCount: 1,
+            lastQueuedAt: 300
+        }
+    ], 12, { maxGroups: 2, maxNames: 3 });
+
+    assert.equal(speech, '阿峰3笔、狗头2笔、鸡Crazy等7笔减仓CHIP，聪明钱买入NEW，另4笔异动');
+});
+
+test('wallet freshness uses WSS time and enforces a strict upper bound', () => {
+    const now = 20_000;
+    const result = splitFreshItems([
+        { id: 'fresh', wssReceivedAt: 15_001, _queuedAt: 19_000 },
+        { id: 'boundary', wssReceivedAt: 14_000, _queuedAt: 19_500 },
+        { id: 'queued-fallback', _queuedAt: 15_500 }
+    ], now, 6_000);
+
+    assert.deepEqual(result.fresh.map((item) => item.id), ['fresh', 'queued-fallback']);
+    assert.deepEqual(result.stale.map((item) => item.id), ['boundary']);
 });
 
 test('sequential wallet playback starts cached name before action-token is ready', async () => {

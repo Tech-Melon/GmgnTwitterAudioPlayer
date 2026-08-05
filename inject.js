@@ -176,6 +176,8 @@
                 } else if (parsed && parsed.channel === 'following_wallet_activity' && parsed.data && Array.isArray(parsed.data)) {
                     if (!window.__GMGN_ENABLE_WALLET) return;
                     parsed.data.forEach(item => {
+                        // 仅买入/卖出会触发播报；transferOut 等高频状态在 MAIN World 就地丢弃。
+                        if (!item || (item.s !== 'buy' && item.s !== 'sell')) return;
                         // 取消 cnt === "processed" 的过滤，交由 content.js 基于 txHash 进行去重，防止部分交易只有 confirm 导致漏播
                         window.dispatchEvent(new CustomEvent('GMGN_WALLET_MSG', {
                             detail: {

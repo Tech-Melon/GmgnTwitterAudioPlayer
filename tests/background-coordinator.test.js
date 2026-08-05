@@ -203,7 +203,7 @@ test('background removes pending reservation when every processor rejects', asyn
         type: 'GMGN_INGEST_EVENT',
         kind: 'wallet',
         eventId: 'wallet_rejected',
-        payload: { item: { h: '0x9', cnt: 'processed' } }
+        payload: { item: { h: '0x9', s: 'buy', cnt: 'processed' } }
     }, sender);
 
     assert.equal(response.ok, false);
@@ -235,7 +235,7 @@ test('a busy processor is not replaced when its ping takes longer than 500ms', a
         type: 'GMGN_INGEST_EVENT',
         kind: 'wallet',
         eventId: 'wallet_busy_processor',
-        payload: { item: { h: '0x21', cnt: 'processed' } }
+        payload: { item: { h: '0x21', s: 'buy', cnt: 'processed' } }
     };
     await harness.dispatch(event, firstSender);
     const duplicate = await harness.dispatch(event, secondSender);
@@ -265,7 +265,7 @@ test('authorized playback failure retries the pending event on the same processo
         type: 'GMGN_INGEST_EVENT',
         kind: 'wallet',
         eventId: 'wallet_retry',
-        payload: { item: { h: '0x31', cnt: 'processed' } }
+        payload: { item: { h: '0x31', s: 'buy', cnt: 'processed' } }
     }, sender);
     const retry = await harness.dispatch({
         type: 'GMGN_EVENT_RETRY',
@@ -279,6 +279,29 @@ test('authorized playback failure retries the pending event on the same processo
     assert.deepEqual(Array.from(retry.retried), ['wallet_retry']);
     assert.equal(processDeliveries, 2);
     assert.equal(harness.sessionState.gmgnEventCoordinatorState.pending.length, 1);
+});
+
+test('background ignores non-trade wallet activity before processor coordination', async () => {
+    const harness = createBackgroundHarness();
+    const sender = { tab: { id: 51 }, documentId: 'doc-51' };
+    await harness.dispatch({ type: 'GMGN_REGISTER_MONITOR' }, sender);
+
+    let processDeliveries = 0;
+    harness.setTabsSendHandler((_tabId, _message, callback) => {
+        processDeliveries += 1;
+        callback({ ok: true, disposition: 'complete', runtimeState: {} });
+    });
+
+    const response = await harness.dispatch({
+        type: 'GMGN_INGEST_EVENT',
+        kind: 'wallet',
+        eventId: 'wallet_transfer_out',
+        payload: { item: { h: '0x51', s: 'transferOut', cnt: 'processed' } }
+    }, sender);
+
+    assert.equal(response.ok, true);
+    assert.equal(response.ignored, true);
+    assert.equal(processDeliveries, 0);
 });
 
 test('discarding the processor immediately replays pending work on another tab', async () => {
