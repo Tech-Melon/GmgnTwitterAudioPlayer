@@ -4,7 +4,7 @@
  * - tts：TTS / 默认 ding
  * 仅由 background 转发 content 的 OFFSCREEN_* 消息
  *
- * 注意：同通道新任务会打断旧任务；必须 settle 旧 Promise，避免 content 调度器永远等不到 onComplete
+ * 同通道严格 FIFO，只有显式 STOP 才会打断当前任务。
  */
 
 const exclusivePlayer = new Audio();
@@ -15,6 +15,109 @@ let ttsGen = 0;
 let exclusiveCancel = null;
 /** @type {null | (() => void)} */
 let ttsCancel = null;
+const channelQueues = {
+  exclusive: [],
+  tts: []
+};
+const channelRunning = {
+  exclusive: false,
+  tts: false
+};
+const channelGainNodes = {
+  exclusive: null,
+  tts: null
+};
+const MAX_QUEUE_LENGTH = 100;
+const DEFAULT_JOB_TTL_MS = 2 * 60 * 1000;
+let audioContext = null;
+let debugLoggingEnabled = !(chrome.storage && chrome.storage.local);
+
+if (chrome.storage && chrome.storage.local) {
+  chrome.storage.local.get(['debugLoggingEnabled'], (result) => {
+    debugLoggingEnabled = result && result.debugLoggingEnabled === true;
+  });
+  if (chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'local' && 'debugLoggingEnabled' in changes) {
+        debugLoggingEnabled = changes.debugLoggingEnabled.newValue === true;
+      }
+    });
+  }
+}
+
+function diagnosticLog(stage, details = {}) {
+  if (!debugLoggingEnabled) return;
+  try {
+    chrome.runtime.sendMessage({
+      type: 'GMGN_DIAGNOSTIC_LOG',
+      entry: {
+        ts: Date.now(),
+        context: 'offscreen',
+        stage,
+        ...details
+      }
+    }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {
+    // 扩展重载时诊断不可用，不应影响播放。
+  }
+}
+
+function normalizeVolume(volume) {
+  const parsed = Number(volume);
+  return Math.max(0, Math.min(Number.isFinite(parsed) ? parsed : 1, 1.5));
+}
+
+function getAudioContext() {
+  if (audioContext) return audioContext;
+  const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  audioContext = new AudioContextClass();
+  return audioContext;
+}
+
+function ensurePlayerGain(channel, player) {
+  if (channelGainNodes[channel]) return channelGainNodes[channel];
+  const ctx = getAudioContext();
+  if (!ctx || typeof ctx.createMediaElementSource !== 'function') return null;
+  const source = ctx.createMediaElementSource(player);
+  const gain = ctx.createGain();
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  channelGainNodes[channel] = gain;
+  return gain;
+}
+
+async function resumeAudioContext() {
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === 'suspended') await ctx.resume().catch(() => {});
+  return ctx;
+}
+
+async function playBeep(volume) {
+  const ctx = await resumeAudioContext();
+  if (!ctx || typeof ctx.createOscillator !== 'function') {
+    return { ok: false, error: 'audio_context_unavailable' };
+  }
+  return new Promise((resolve) => {
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+    const peak = 0.3 * normalizeVolume(volume);
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0001), now + 0.01);
+    gain.gain.setValueAtTime(Math.max(peak, 0.0001), now + 0.055);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.onended = () => resolve({ ok: true });
+    oscillator.start(now);
+    oscillator.stop(now + 0.085);
+  });
+}
 
 function stopPlayer(player) {
   try {
@@ -43,27 +146,26 @@ function resolvePlayUrl(item) {
  * 顺序播放一段或多段
  * @returns {Promise<{ok:boolean, error?:string, interrupted?:boolean}>}
  */
-function playOnChannel(channel, items, volume) {
+function playItemsNow(channel, items, volume, options = {}) {
   const list = (Array.isArray(items) ? items : [items]).filter(Boolean);
   if (list.length === 0) return Promise.resolve({ ok: false, error: 'empty' });
 
-  // 打断同通道上一段：先 cancel 旧 Promise，再停播放器
-  if (channel === 'exclusive' && typeof exclusiveCancel === 'function') {
-    exclusiveCancel();
-    exclusiveCancel = null;
-  }
-  if (channel === 'tts' && typeof ttsCancel === 'function') {
-    ttsCancel();
-    ttsCancel = null;
-  }
-
   const player = channel === 'exclusive' ? exclusivePlayer : ttsPlayer;
+  const segmentGapMs = Number.isFinite(Number(options.segmentGapMs))
+    ? Math.max(0, Math.min(200, Number(options.segmentGapMs)))
+    : 28;
   const gen = channel === 'exclusive' ? ++exclusiveGen : ++ttsGen;
   const isCurrent = () => (channel === 'exclusive' ? exclusiveGen : ttsGen) === gen;
 
   stopPlayer(player);
-  const vol = Math.max(0, Math.min(Number(volume) || 1, 1.5));
-  player.volume = Math.min(1, vol);
+  const vol = normalizeVolume(volume);
+  const gain = ensurePlayerGain(channel, player);
+  if (gain) {
+    player.volume = 1;
+    gain.gain.setValueAtTime(vol, gain.context.currentTime);
+  } else {
+    player.volume = Math.min(1, vol);
+  }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -102,7 +204,12 @@ function playOnChannel(channel, items, volume) {
         finish(true);
         return;
       }
-      const url = resolvePlayUrl(list[idx++]);
+      const item = list[idx++];
+      if (item && typeof item === 'object' && item.kind === 'beep') {
+        playBeep(vol).then(playNext).catch(() => playNext());
+        return;
+      }
+      const url = resolvePlayUrl(item);
       if (!url) {
         playNext();
         return;
@@ -113,10 +220,14 @@ function playOnChannel(channel, items, volume) {
           settle({ ok: true, interrupted: true });
           return;
         }
+        if (idx >= list.length) {
+          finish(true);
+          return;
+        }
         setTimeout(() => {
           if (isCurrent()) playNext();
           else settle({ ok: true, interrupted: true });
-        }, 28);
+        }, segmentGapMs);
       };
       player.onerror = () => {
         if (!isCurrent()) {
@@ -141,11 +252,136 @@ function playOnChannel(channel, items, volume) {
   });
 }
 
+function settleQueuedJob(job, result) {
+  if (!job || job.settled) return;
+  job.settled = true;
+  job.resolve({
+    ...result,
+    queued: true,
+    queueDepth: job.queueDepthAtEnqueue || 1
+  });
+}
+
+function drainChannel(channel) {
+  if (channelRunning[channel]) return;
+  const now = Date.now();
+  let job = channelQueues[channel].shift();
+  while (job && job.expiresAt <= now) {
+    console.warn(`[GMGN Offscreen] 丢弃过期任务 | channel=${channel}`);
+    diagnosticLog('offscreen_job_expired', {
+      ...(job.diagnostic || {}),
+      source: job.source,
+      traceId: job.traceId,
+      channel,
+      ageMs: now - job.createdAt
+    });
+    settleQueuedJob(job, { ok: false, error: 'expired' });
+    job = channelQueues[channel].shift();
+  }
+  if (!job) return;
+
+  channelRunning[channel] = true;
+  const startedAt = Date.now();
+  diagnosticLog('offscreen_job_start', {
+    ...(job.diagnostic || {}),
+    source: job.source,
+    traceId: job.traceId,
+    channel,
+    queueWaitMs: startedAt - job.createdAt,
+    wssToPlaybackMs: job.diagnostic && job.diagnostic.wssReceivedAt
+      ? startedAt - job.diagnostic.wssReceivedAt
+      : undefined,
+    processingToPlaybackMs: job.diagnostic && job.diagnostic.processingStartedAt
+      ? startedAt - job.diagnostic.processingStartedAt
+      : undefined,
+    queuedBehind: channelQueues[channel].length,
+    segmentCount: Array.isArray(job.items) ? job.items.length : 1
+  });
+  playItemsNow(channel, job.items, job.volume, { segmentGapMs: job.segmentGapMs })
+    .then((result) => {
+      diagnosticLog('offscreen_job_done', {
+        ...(job.diagnostic || {}),
+        source: job.source,
+        traceId: job.traceId,
+        channel,
+        durationMs: Date.now() - startedAt,
+        ok: !!(result && result.ok),
+        interrupted: !!(result && result.interrupted),
+        error: result && result.error
+      });
+      settleQueuedJob(job, result || { ok: false, error: 'empty_result' });
+    })
+    .catch((error) => {
+      console.warn('[GMGN Offscreen] 播放任务失败:', error);
+      diagnosticLog('offscreen_job_done', {
+        ...(job.diagnostic || {}),
+        source: job.source,
+        traceId: job.traceId,
+        channel,
+        durationMs: Date.now() - startedAt,
+        ok: false,
+        error: String(error && error.message ? error.message : error)
+      });
+      settleQueuedJob(job, {
+        ok: false,
+        error: String(error && error.message ? error.message : error)
+      });
+    })
+    .finally(() => {
+      channelRunning[channel] = false;
+      drainChannel(channel);
+    });
+}
+
+function enqueueOnChannel(channel, items, volume, options = {}) {
+  const now = Date.now();
+  while (channelQueues[channel].length >= MAX_QUEUE_LENGTH) {
+    const dropped = channelQueues[channel].shift();
+    console.warn(`[GMGN Offscreen] 队列超限，丢弃最旧任务 | channel=${channel}`);
+    diagnosticLog('offscreen_job_dropped', {
+      ...((dropped && dropped.diagnostic) || {}),
+      source: dropped && dropped.source,
+      traceId: dropped && dropped.traceId,
+      channel,
+      reason: 'queue_limit'
+    });
+    settleQueuedJob(dropped, { ok: false, error: 'queue_limit' });
+  }
+  let resolveCompletion;
+  const completion = new Promise((resolve) => {
+    resolveCompletion = resolve;
+  });
+  const job = {
+    items,
+    volume,
+    createdAt: Number(options.createdAt) || now,
+    expiresAt: Number(options.expiresAt) || now + DEFAULT_JOB_TTL_MS,
+    source: options.source || 'unknown',
+    segmentGapMs: options.segmentGapMs,
+    traceId: options.traceId || '',
+    diagnostic: options.diagnostic || {},
+    settled: false,
+    resolve: resolveCompletion,
+    queueDepthAtEnqueue: 0
+  };
+  channelQueues[channel].push(job);
+  drainChannel(channel);
+  job.queueDepthAtEnqueue = channelQueues[channel].length + (channelRunning[channel] ? 1 : 0);
+  diagnosticLog('offscreen_queue_depth', {
+    ...(options.diagnostic || {}),
+    source: options.source || 'unknown',
+    traceId: options.traceId || '',
+    channel,
+    queueDepth: job.queueDepthAtEnqueue
+  });
+  return completion;
+}
+
 async function handlePlay(msg) {
   const channel = msg.channel === 'exclusive' ? 'exclusive' : 'tts';
   const items = msg.items || msg.urls || [];
   const volume = msg.volume;
-  return playOnChannel(channel, items, volume);
+  return enqueueOnChannel(channel, items, volume, msg);
 }
 
 /** 用户手势后预热：静音短音，建立 offscreen 可播状态 */
@@ -172,20 +408,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'OFFSCREEN_PLAY') {
-    handlePlay(msg)
-      .then(sendResponse)
-      .catch((e) => sendResponse({ ok: false, error: String(e && e.message ? e.message : e) }));
+    handlePlay(msg).then(sendResponse);
     return true;
   }
 
   if (msg.type === 'OFFSCREEN_STOP') {
     if (!msg.channel || msg.channel === 'tts') {
+      channelQueues.tts.splice(0).forEach((job) => {
+        settleQueuedJob(job, { ok: true, interrupted: true });
+      });
       if (typeof ttsCancel === 'function') ttsCancel();
       ttsCancel = null;
       ttsGen += 1;
       stopPlayer(ttsPlayer);
     }
     if (!msg.channel || msg.channel === 'exclusive') {
+      channelQueues.exclusive.splice(0).forEach((job) => {
+        settleQueuedJob(job, { ok: true, interrupted: true });
+      });
       if (typeof exclusiveCancel === 'function') exclusiveCancel();
       exclusiveCancel = null;
       exclusiveGen += 1;
@@ -196,4 +436,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-console.log('[GMGN Offscreen] 后台播报文档已就绪');
+if (debugLoggingEnabled) console.log('[GMGN Offscreen] 后台播报文档已就绪');

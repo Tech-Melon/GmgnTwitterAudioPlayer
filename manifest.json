@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "GMGN 盯盘伴侣",
-    "version": "1.13.5",
+    "version": "1.14.0",
     "description": "高度可定制的GMGN twitter音频播报插件(X: 0xTechMelon)",
     "icons": {
         "16": "images/icon16.png",
@@ -25,6 +25,9 @@
         "*://*.gmgn.ai/*",
         "*://gmgn.ai/*"
     ],
+    "optional_host_permissions": [
+        "http://127.0.0.1:37921/*"
+    ],
     "background": {
         "service_worker": "background.js"
     },
@@ -35,6 +38,7 @@
                 "*://gmgn.ai/*"
             ],
             "js": [
+                "lib/twitter-event.js",
                 "inject.js"
             ],
             "run_at": "document_start",
@@ -46,6 +50,7 @@
                 "*://gmgn.ai/*"
             ],
             "js": [
+                "lib/wallet-event.js",
                 "content.js"
             ],
             "run_at": "document_start"

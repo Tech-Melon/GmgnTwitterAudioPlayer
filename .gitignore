@@ -4,3 +4,4 @@ CLAUDE.md
 _run_*
 tmp/
 plan.md
+logs/*.ndjson

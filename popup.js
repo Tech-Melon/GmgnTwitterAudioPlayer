@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     // ☁️ Cloudflare Edge-TTS Worker API 统一入口
     const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
+    const DIAGNOSTIC_ORIGIN = 'http://127.0.0.1:37921/*';
 
     // 语速三档：较快 / 极快 / 闪电（Edge-TTS prosody rate）
     const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
@@ -164,6 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
         masterToggle: document.getElementById('masterToggle'),
         enableTwitterToggle: document.getElementById('enableTwitterToggle'),
         enableWalletToggle: document.getElementById('enableWalletToggle'),
+        debugLoggingToggle: document.getElementById('debugLoggingToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 未配置规则提醒
         enableTTSToggle: document.getElementById('enableTTSToggle'), // TTS 开关
         playMappedGenericToggle: document.getElementById('playMappedGenericToggle'), // 已备注无专属音
@@ -417,7 +419,7 @@ document.addEventListener('DOMContentLoaded', () => {
             'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped',
             'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts',
             'walletFilters', 'walletDictionary', 'blockedWsChannels', 'updateNotice',
-            'lastAcknowledgedVersion', 'lastChangelogTabVersion'
+            'lastAcknowledgedVersion', 'lastChangelogTabVersion', 'debugLoggingEnabled'
         ], (result) => {
             const mappings = result.twitterAudioMappings || {};
             const customAudios = result.customAudios || {};
@@ -428,6 +430,15 @@ document.addEventListener('DOMContentLoaded', () => {
             els.masterToggle.checked = result.isMasterEnabled !== false;
             els.enableTwitterToggle.checked = result.enableTwitter !== false;
             els.enableWalletToggle.checked = result.enableWallet !== false;
+            if (els.debugLoggingToggle) {
+                els.debugLoggingToggle.checked = false;
+                if (result.debugLoggingEnabled === true) {
+                    chrome.permissions.contains({ origins: [DIAGNOSTIC_ORIGIN] }, (granted) => {
+                        els.debugLoggingToggle.checked = granted === true;
+                        if (!granted) chrome.storage.local.set({ debugLoggingEnabled: false });
+                    });
+                }
+            }
             els.playDefaultToggle.checked = result.playDefaultUnmapped !== false;
             els.enableTTSToggle.checked = result.enableTTS !== false;
             if (els.playMappedGenericToggle) {
@@ -1049,6 +1060,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (key === 'enableTwitter' && els.enableTwitterToggle) els.enableTwitterToggle.checked = saved;
                 if (key === 'enableWallet' && els.enableWalletToggle) els.enableWalletToggle.checked = saved;
                 if (key === 'isMasterEnabled' && els.masterToggle) els.masterToggle.checked = saved;
+                if (key === 'debugLoggingEnabled' && els.debugLoggingToggle) els.debugLoggingToggle.checked = saved;
                 if (typeof onToast === 'function') onToast(saved);
             });
         });
@@ -1069,6 +1081,35 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(on ? '钱包监控已开启' : '钱包监控已关闭');
         });
     });
+    if (els.debugLoggingToggle) {
+        els.debugLoggingToggle.addEventListener('change', async (e) => {
+            const enabled = e.target.checked === true;
+            try {
+                if (enabled) {
+                    const granted = await chrome.permissions.request({
+                        origins: [DIAGNOSTIC_ORIGIN]
+                    });
+                    if (!granted) {
+                        e.target.checked = false;
+                        persistBoolToggle('debugLoggingEnabled', false, () => {
+                            showToast('未授权本地日志连接，Debug 日志保持关闭');
+                        });
+                        return;
+                    }
+                } else {
+                    await chrome.permissions.remove({ origins: [DIAGNOSTIC_ORIGIN] });
+                }
+                persistBoolToggle('debugLoggingEnabled', enabled, (on) => {
+                    showToast(on ? 'Debug 日志已开启' : 'Debug 日志已关闭');
+                });
+            } catch (error) {
+                e.target.checked = false;
+                persistBoolToggle('debugLoggingEnabled', false, () => {
+                    showToast('Debug 权限设置失败，日志保持关闭');
+                });
+            }
+        });
+    }
 
     // WSS 频道屏蔽：折叠箭头 + 预设勾选 / 自定义添加 / 删除
     if (els.wsBlockDetails) {

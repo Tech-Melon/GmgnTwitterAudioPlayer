@@ -885,6 +885,16 @@
             <div style="font-size: 11px; color: #ff9500; padding: 0 4px; line-height: 1.4;">
                 * 注意：实际播报音量受 GMGN 网页所在标签页系统音量影响，请确保未将网页静音。
             </div>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e5ea; display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+                <div style="min-width: 0;">
+                    <span style="font-size: 13px; font-weight: 500; display: block;">Debug 日志</span>
+                    <span style="font-size: 10px; color: var(--text-sec); line-height: 1.4; display: block; margin-top: 2px;">排查问题时记录控制台与本地诊断日志</span>
+                </div>
+                <label class="switch" style="flex-shrink: 0;">
+                    <input type="checkbox" id="debugLoggingToggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
             <div style="margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
                 <span style="font-size: 12px; color: var(--text-sec);">当前版本 <b id="appVersionLabel" style="color: var(--text-main);">—</b></span>
                 <button type="button" id="showUpdateNotesBtn" class="outline" style="font-size: 12px; padding: 6px 10px; white-space: nowrap;">查看更新说明</button>
