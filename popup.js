@@ -6,6 +6,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // 语速三档：较快 / 极快 / 闪电（Edge-TTS prosody rate）
     const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
     const TTS_RATE_DEFAULT = '+75%'; // 闪电
+    const SUPPORTED_WALLET_CHAINS = GmgnWalletEvent.SUPPORTED_WALLET_CHAINS;
+    const DEFAULT_WALLET_CHAINS = GmgnWalletEvent.DEFAULT_WALLET_CHAINS;
+    const normalizeWalletChain = GmgnWalletEvent.normalizeChain;
+    const normalizeEnabledWalletChains = GmgnWalletEvent.normalizeEnabledChains;
 
     /** 将任意旧档位映射到三档之一 */
     const normalizeRate = (rate) => {
@@ -225,6 +229,10 @@ document.addEventListener('DOMContentLoaded', () => {
         filterBuy: document.getElementById('filterBuy'),
         filterSellReduce: document.getElementById('filterSellReduce'),
         filterSellClear: document.getElementById('filterSellClear'),
+        walletChainList: document.getElementById('walletChainList'),
+        walletChainCount: document.getElementById('walletChainCount'),
+        selectAllWalletChainsBtn: document.getElementById('selectAllWalletChainsBtn'),
+        resetWalletChainsBtn: document.getElementById('resetWalletChainsBtn'),
         testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
         testWalletSellReduceBtn: document.getElementById('testWalletSellReduceBtn'),
         testWalletSellClearBtn: document.getElementById('testWalletSellClearBtn'),
@@ -279,6 +287,48 @@ document.addEventListener('DOMContentLoaded', () => {
         customWalletAddress: document.getElementById('customWalletAddress'),
         addCustomWalletBtn: document.getElementById('addCustomWalletBtn')
     };
+
+    function getWalletChainInputs() {
+        return els.walletChainList ? Array.from(els.walletChainList.querySelectorAll('input[data-wallet-chain]')) : [];
+    }
+
+    function updateWalletChainCount() {
+        const inputs = getWalletChainInputs();
+        const selected = inputs.filter((input) => input.checked).length;
+        if (els.walletChainCount) els.walletChainCount.textContent = `已选 ${selected}/${inputs.length}`;
+    }
+
+    function renderWalletChainSelector() {
+        if (!els.walletChainList) return;
+        els.walletChainList.innerHTML = SUPPORTED_WALLET_CHAINS.map((chain) => `
+            <label class="wallet-chain-option" title="${escapeHTML(chain.label)}">
+                <input type="checkbox" data-wallet-chain="${escapeHTML(chain.id)}" aria-label="${escapeHTML(chain.label)}">
+                <span class="wallet-chain-logo" style="background:${chain.color};color:${chain.textColor};">${escapeHTML(chain.mark)}</span>
+                <span class="wallet-chain-name">${escapeHTML(chain.label)}</span>
+            </label>
+        `).join('');
+        getWalletChainInputs().forEach((input) => input.addEventListener('change', () => {
+            updateWalletChainCount();
+            saveWalletFilters();
+        }));
+        updateWalletChainCount();
+    }
+
+    function setWalletChainSelection(chains) {
+        const selected = new Set(normalizeEnabledWalletChains(chains));
+        getWalletChainInputs().forEach((input) => {
+            input.checked = selected.has(input.dataset.walletChain);
+        });
+        updateWalletChainCount();
+    }
+
+    function getSelectedWalletChains() {
+        return getWalletChainInputs()
+            .filter((input) => input.checked)
+            .map((input) => normalizeWalletChain(input.dataset.walletChain));
+    }
+
+    renderWalletChainSelector();
 
     function showToast(message, duration = 2000) {
         els.toast.textContent = message;
@@ -515,6 +565,7 @@ document.addEventListener('DOMContentLoaded', () => {
             els.filterOther.checked = filters.other !== false; // 🌟 新增
 
             const walletFilters = result.walletFilters || { buy: true, sellReduce: true, sellClear: true, minAmount: 0 };
+            setWalletChainSelection(walletFilters.walletChains);
             els.filterBuy.checked = walletFilters.buy !== false;
             els.filterSellReduce.checked = walletFilters.sellReduce !== false;
             els.filterSellClear.checked = walletFilters.sellClear !== false;
@@ -1441,6 +1492,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 sellReduceAddrCooldownTime: parseInt(els.sellReduceAddrCooldownTime.value) || 15,
                 sellClearAddrCooldownEnabled: els.sellClearAddrCooldownEnabled.checked,
                 sellClearAddrCooldownTime: parseInt(els.sellClearAddrCooldownTime.value) || 15,
+                walletChains: getSelectedWalletChains(),
                 minAmount: parseFloat(els.walletMinAmount.value) || 0,
                 maxAmount: parseFloat(els.walletMaxAmount.value) || 0,
                 minMcap: parseFloat(els.walletMinMcap.value) || 0,
@@ -1525,6 +1577,19 @@ document.addEventListener('DOMContentLoaded', () => {
     els.walletMaxMcap.addEventListener('change', saveWalletFilters);
     els.walletMinAge.addEventListener('change', saveWalletFilters);
     els.walletMaxAge.addEventListener('change', saveWalletFilters);
+    if (els.selectAllWalletChainsBtn) {
+        els.selectAllWalletChainsBtn.addEventListener('click', () => {
+            getWalletChainInputs().forEach((input) => { input.checked = true; });
+            updateWalletChainCount();
+            saveWalletFilters('已开启全部链');
+        });
+    }
+    if (els.resetWalletChainsBtn) {
+        els.resetWalletChainsBtn.addEventListener('click', () => {
+            setWalletChainSelection(DEFAULT_WALLET_CHAINS);
+            saveWalletFilters('已恢复默认链');
+        });
+    }
     if (els.walletMaxTokenNameLen) {
         els.walletMaxTokenNameLen.addEventListener('change', () => {
             const n = parseInt(els.walletMaxTokenNameLen.value, 10);

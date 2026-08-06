@@ -22,6 +22,7 @@ const hashMonitorPayload = GmgnWalletEvent.hashPayload;
 const buildWalletEventId = GmgnWalletEvent.buildEventId;
 const buildWalletTransactionKey = GmgnWalletEvent.buildTransactionKey;
 const isWalletTokenBlocked = GmgnWalletEvent.isTokenBlocked;
+const isWalletChainEnabled = GmgnWalletEvent.isChainEnabled;
 const buildWalletSingleSpeechParts = GmgnWalletEvent.buildSingleSpeechParts;
 const formatCompactWalletSpeechGroups = GmgnWalletEvent.formatCompactSpeechGroups;
 const splitFreshWalletItems = GmgnWalletEvent.splitFreshItems;
@@ -3230,6 +3231,10 @@ async function handleWalletMsg(e) {
         if (!item) return;
         // 高频 transferOut/transferIn/callOut 等与播报无关，不写日志也不进入 Background 串行链。
         if (item.s !== 'buy' && item.s !== 'sell') return;
+        if (isCacheReady && !isWalletChainEnabled(item, configCache.walletFilters && configCache.walletFilters.walletChains)) {
+            logWalletSkip('该链播报未启用', item, { chain: item.n || '' });
+            return;
+        }
         const eventId = buildWalletEventId(item);
         diagnosticLog('wallet_wss_received', {
             source: 'wallet',
@@ -3239,6 +3244,7 @@ async function handleWalletMsg(e) {
             txHash: item.h,
             activityId: item.id || item.si,
             token: item.bs,
+            chain: item.n,
             walletStage: item.cnt,
             action: item.s
         });
@@ -3261,6 +3267,10 @@ async function handleWalletMsg(e) {
             logWalletSkip('钱包播报开关已关闭', item, { wssReceivedAt });
             return;
         }
+        if (!isWalletChainEnabled(item, configCache.walletFilters && configCache.walletFilters.walletChains)) {
+            logWalletSkip('该链播报未启用', item, { chain: item && item.n });
+            return;
+        }
         const coordinatorEventId = e.__gmgnEventId;
     diagnosticLog('wallet_received', {
         source: 'wallet',
@@ -3271,6 +3281,7 @@ async function handleWalletMsg(e) {
         txHash: item && item.h,
         activityId: item && (item.id || item.si),
         token: item && item.bs,
+        chain: item && item.n,
         walletStage: item && item.cnt,
         action: item && item.s
     });

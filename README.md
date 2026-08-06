@@ -105,6 +105,9 @@ node .\scripts\diagnostic-log-server.js
 
 ## 📋 更新日志
 
+### 2026.8.6
+- **v1.15.0** — 钱包监控新增 12 项链级语音开关，默认开启 SOL、ETH、BSC、Robinhood、Base，并修复跨链交易去重冲突
+
 ### 2026.8.5
 - **v1.14.2** — 完善多开与高峰行情播报，钱包买入、减仓、清仓更及时完整，并支持按需诊断运行状态
 - **v1.14.1** — WSS 入口过滤非买卖活动，钱包突发流量改为单段有界摘要并设置 6 秒语音新鲜度上限
@@ -186,6 +189,14 @@ The offscreen permission is used solely to play local alert sounds and TTS for T
 
 ## 📝 详细商店发布文案 (Store Changelog)
 *(打包脚本 pack.py 会自动提取此段落并打印，方便直接复制到谷歌商店)*
+
+**v1.15.0**
+⛓️ **钱包监控支持按链选择播报**
+- 根据 GMGN 当前链菜单支持 SOL、BSC、Base、ETH、Robinhood、Stable、Arc、X Layer、HyperEVM、MegaETH、Monad、Tron
+- 每条链可独立勾选是否进行钱包语音播报，并提供“全选”和“恢复默认”快捷操作
+- 默认开启 SOL、ETH、BSC、Robinhood、Base，其余链保持静音，可随时手动开启
+- 链筛选在消息进入播报队列前生效，关闭的链不会占用批处理和 TTS 队列
+- 跨链事件使用链 ID 隔离去重，避免相同地址或交易标识在不同链互相影响
 
 **v1.14.2**
 🔊 **多开与高峰播报体验升级**

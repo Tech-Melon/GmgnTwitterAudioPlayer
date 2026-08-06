@@ -2,6 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+    SUPPORTED_WALLET_CHAINS,
+    DEFAULT_WALLET_CHAINS,
+    normalizeChain,
+    normalizeEnabledChains,
+    isChainEnabled,
     buildEventId,
     buildTransactionKey,
     isTokenBlocked,
@@ -16,6 +21,38 @@ const {
 } = require('../lib/wallet-event.js');
 
 const TX_HASH = '0x598248aac699a257a864f4c3f3ecedab2356fcb5c86a70dc639436713047ceca';
+
+test('supported wallet chains match the current GMGN chain menu', () => {
+    assert.deepEqual(SUPPORTED_WALLET_CHAINS.map((chain) => chain.id), [
+        'sol', 'bsc', 'base', 'eth', 'robinhood', 'stable',
+        'arc', 'xlayer', 'hyperevm', 'megaeth', 'monad', 'tron'
+    ]);
+    assert.deepEqual(DEFAULT_WALLET_CHAINS, ['sol', 'eth', 'bsc', 'robinhood', 'base']);
+});
+
+test('wallet chain filters normalize aliases and default conservatively', () => {
+    assert.equal(normalizeChain('X Layer'), 'xlayer');
+    assert.equal(normalizeChain('hyper_evm'), 'hyperevm');
+    assert.equal(normalizeChain('Ethereum'), 'eth');
+    assert.deepEqual(normalizeEnabledChains(['SOL', 'solana', 'unknown']), ['sol']);
+    assert.equal(isChainEnabled({ n: 'bsc' }), true);
+    assert.equal(isChainEnabled({ n: 'monad' }), false);
+    assert.equal(isChainEnabled({ n: 'MONAD' }, ['monad']), true);
+    assert.equal(isChainEnabled({ n: 'tron' }, []), false);
+    assert.equal(isChainEnabled({}, DEFAULT_WALLET_CHAINS), false);
+});
+
+test('identical EVM transaction data on different chains does not collide', () => {
+    const item = {
+        h: TX_HASH,
+        id: 'shared-activity',
+        ba: '0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1',
+        cnt: 'confirm'
+    };
+
+    assert.notEqual(buildEventId({ ...item, n: 'eth' }), buildEventId({ ...item, n: 'bsc' }));
+    assert.notEqual(buildTransactionKey({ ...item, n: 'eth' }), buildTransactionKey({ ...item, n: 'bsc' }));
+});
 
 test('different assets in one transaction have different event and state keys', () => {
     const first = {
