@@ -32,6 +32,8 @@ let persistTimer = null;
 let persistDirty = false;
 let persistChain = Promise.resolve();
 const PERSIST_DEBOUNCE_MS = 150;
+/** Processor 超过该时间无心跳/注册则允许其它 Tab 接管 */
+const MONITOR_STALE_MS = 20000;
 const DIAGNOSTIC_ORIGIN = 'http://127.0.0.1:37921/*';
 const DIAGNOSTIC_ENDPOINT = 'http://127.0.0.1:37921/log';
 const DIAGNOSTIC_SESSION_ID = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -225,20 +227,111 @@ function persistCoordinator(immediate = false) {
     return Promise.resolve();
 }
 
-function registerMonitor(sender) {
+function buildMonitorRecord(sender, options = {}) {
     if (!sender || !sender.tab || !Number.isInteger(sender.tab.id)) return null;
-    const record = {
+    return {
         tabId: sender.tab.id,
         documentId: sender.documentId || null,
-        lastSeenAt: Date.now()
+        lastSeenAt: Date.now(),
+        visible: options.visible === true
     };
+}
+
+function isProcessorRecord(record) {
+    const processor = eventCoordinator.processor;
+    if (!processor || !record) return false;
+    return processor.tabId === record.tabId
+        && (!processor.documentId || processor.documentId === record.documentId);
+}
+
+function isMonitorStale(record, now = Date.now()) {
+    if (!record || !Number.isFinite(record.lastSeenAt)) return true;
+    return (now - record.lastSeenAt) > MONITOR_STALE_MS;
+}
+
+/**
+ * 注册/刷新监控 Tab。
+ * - 默认粘性保留当前 Processor，避免多 Tab 抖动
+ * - preferProcessor + visible：前台切回主动接管播报权
+ * - Processor 心跳过期：允许其它存活 Tab 接管
+ * @returns {{ record: object, processorChanged: boolean } | null}
+ */
+function registerMonitor(sender, options = {}) {
+    const record = buildMonitorRecord(sender, options);
+    if (!record) return null;
     monitorTabs.set(record.tabId, record);
 
-    const current = eventCoordinator.processor;
-    if (!current || current.tabId === record.tabId) {
+    const previous = eventCoordinator.processor;
+    const preferProcessor = options.preferProcessor === true && record.visible;
+    let shouldAssign = false;
+
+    if (!previous) {
+        shouldAssign = true;
+    } else if (previous.tabId === record.tabId) {
+        // 同 Tab 刷新 documentId / epoch 粘性
+        shouldAssign = true;
+    } else if (preferProcessor) {
+        shouldAssign = true;
+    } else if (isMonitorStale(monitorTabs.get(previous.tabId))) {
+        // 旧 Processor 失联：优先让仍活着的 Tab（尤其前台）接手
+        shouldAssign = record.visible || options.allowStaleTakeover !== false;
+    }
+
+    if (shouldAssign) {
         eventCoordinator.assignProcessor(record.tabId, record.documentId);
     }
-    return record;
+
+    const processor = eventCoordinator.processor;
+    const processorChanged = !previous
+        || !processor
+        || previous.tabId !== processor.tabId
+        || previous.documentId !== processor.documentId
+        || previous.epoch !== processor.epoch;
+
+    return { record, processorChanged };
+}
+
+/** 通知各监控 Tab 当前是否为 Processor（非阻塞） */
+function broadcastProcessorRoles() {
+    const processor = eventCoordinator.processor;
+    for (const record of monitorTabs.values()) {
+        const isProcessor = isProcessorRecord(record);
+        sendToMonitor(record, {
+            type: 'GMGN_PROCESSOR_ROLE',
+            isProcessor,
+            processorEpoch: isProcessor && processor ? processor.epoch : null,
+            processorTabId: processor ? processor.tabId : null
+        }, 800).then((response) => {
+            if (response && response.ok) return;
+            // 失联 Tab 从候选中剔除，避免故障转移反复点名
+            if (response && response.error && /timeout|Receiving end|connection/i.test(String(response.error))) {
+                if (!isProcessorRecord(record)) monitorTabs.delete(record.tabId);
+            }
+        }).catch(() => {});
+    }
+}
+
+async function finalizeProcessorAssignment(processorChanged) {
+    if (!processorChanged) return eventCoordinator.processor;
+    const processor = eventCoordinator.processor;
+    if (processor) {
+        const replayed = await replayPendingEvents(processor);
+        if (!replayed) {
+            monitorTabs.delete(processor.tabId);
+            eventCoordinator.clearProcessor(processor.tabId, processor.documentId);
+            // 尝试其它候选
+            for (const candidate of monitorTabs.values()) {
+                const next = eventCoordinator.assignProcessor(candidate.tabId, candidate.documentId);
+                const ping = await sendToMonitor(next, { type: 'GMGN_PROCESSOR_PING' }, 1200);
+                if (ping.ok && await replayPendingEvents(next)) break;
+                monitorTabs.delete(candidate.tabId);
+                eventCoordinator.clearProcessor(candidate.tabId, candidate.documentId);
+            }
+        }
+    }
+    broadcastProcessorRoles();
+    await persistCoordinator(true);
+    return eventCoordinator.processor;
 }
 
 function sendToMonitor(record, message, timeoutMs = 1500) {
@@ -273,8 +366,17 @@ function sendToMonitor(record, message, timeoutMs = 1500) {
 
 async function routeMonitorEvent(msg, sender) {
     await coordinatorReady;
-    const source = registerMonitor(sender);
-    if (!source) return { ok: false, error: 'invalid_sender' };
+    const registration = registerMonitor(sender, {
+        visible: true,
+        preferProcessor: false,
+        // 事件上报方默认是活跃 Processor；失联时允许它顺势接管
+        allowStaleTakeover: true
+    });
+    if (!registration || !registration.record) return { ok: false, error: 'invalid_sender' };
+    const source = registration.record;
+    if (registration.processorChanged) {
+        await finalizeProcessorAssignment(true);
+    }
     if (!msg.eventId || (msg.kind !== 'twitter' && msg.kind !== 'wallet')) {
         return { ok: false, error: 'invalid_event' };
     }
@@ -356,7 +458,12 @@ async function routeMonitorEvent(msg, sender) {
         if (response.ok) {
             applyProcessorResponse(response, msg.eventId, msg.kind, msg.payload);
             await persistCoordinator(true);
-            return { ok: true, processorTabId: processor.tabId, processorEpoch: processor.epoch };
+            return {
+                ok: true,
+                processorTabId: processor.tabId,
+                processorEpoch: processor.epoch,
+                isProcessor: isProcessorRecord(source)
+            };
         }
         monitorTabs.delete(candidate.tabId);
         eventCoordinator.clearProcessor(candidate.tabId, candidate.documentId);
@@ -609,22 +716,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return false;
     }
 
-    if (msg.type === 'GMGN_REGISTER_MONITOR') {
+    if (msg.type === 'GMGN_REGISTER_MONITOR' || msg.type === 'GMGN_MONITOR_HEARTBEAT') {
         coordinatorReady.then(async () => {
-            const record = registerMonitor(sender);
-            if (!record) {
+            const visible = msg.visible === true
+                || (msg.visible !== false && msg.type === 'GMGN_REGISTER_MONITOR');
+            const preferProcessor = msg.preferProcessor === true;
+            const registration = registerMonitor(sender, {
+                visible,
+                preferProcessor,
+                allowStaleTakeover: msg.type === 'GMGN_MONITOR_HEARTBEAT' || preferProcessor
+            });
+            if (!registration || !registration.record) {
                 sendResponse({ ok: false, error: 'invalid_sender' });
                 return;
             }
-            const processor = eventCoordinator.processor;
-            if (processor && processor.tabId === record.tabId && eventCoordinator.pending.size > 0) {
-                await replayPendingEvents(processor);
+            const processor = await finalizeProcessorAssignment(registration.processorChanged);
+            // 轻量心跳且未切换：仅刷新持久化标记，避免写放大
+            if (!registration.processorChanged && msg.type === 'GMGN_REGISTER_MONITOR') {
+                await persistCoordinator(true);
+            } else if (!registration.processorChanged) {
+                persistCoordinator(false);
             }
-            await persistCoordinator(true);
             sendResponse({
                 ok: true,
                 processor,
-                isProcessor: processor && processor.tabId === record.tabId
+                isProcessor: isProcessorRecord(registration.record)
             });
         }).catch((error) => {
             sendResponse({ ok: false, error: String(error && error.message ? error.message : error) });
@@ -785,17 +901,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function failoverRemovedMonitor(tabId, documentId) {
     await coordinatorReady;
-    if (!eventCoordinator.clearProcessor(tabId, documentId)) return;
-    for (const candidate of monitorTabs.values()) {
+    if (!eventCoordinator.clearProcessor(tabId, documentId)) {
+        // 非 Processor 关闭也要从候选表移除
+        monitorTabs.delete(tabId);
+        return;
+    }
+    // 优先前台 Tab，其次任意存活候选
+    const candidates = Array.from(monitorTabs.values())
+        .filter((record) => record.tabId !== tabId)
+        .sort((left, right) => Number(right.visible === true) - Number(left.visible === true));
+    for (const candidate of candidates) {
         const processor = eventCoordinator.assignProcessor(candidate.tabId, candidate.documentId);
         const ping = await sendToMonitor(processor, { type: 'GMGN_PROCESSOR_PING' }, 1500);
         if (ping.ok && await replayPendingEvents(processor)) {
+            broadcastProcessorRoles();
             await persistCoordinator(true);
             return;
         }
         monitorTabs.delete(candidate.tabId);
         eventCoordinator.clearProcessor(candidate.tabId, candidate.documentId);
     }
+    broadcastProcessorRoles();
     await persistCoordinator(true);
 }
 

@@ -13,6 +13,10 @@ let pendingWalletMessages = [];
 let audioSyncChannel = new BroadcastChannel('gmgn_audio_sync_channel');
 let sharedAudioCtx = null; // 🌟 全局共享 AudioContext（必须在 _unlockAutoplay 之前声明）
 let currentProcessorEpoch = null;
+/** 仅 Processor Tab 全量上报事件；其它 Tab 静默 + 心跳 */
+let isLocalProcessor = false;
+let monitorHeartbeatTimer = null;
+const MONITOR_HEARTBEAT_MS = 8000;
 const LEGACY_TAB_LEADER_ENABLED = false;
 const LEGACY_CROSS_TAB_DEDUP_ENABLED = false;
 const coordinatorScheduledEventIds = new Set();
@@ -73,6 +77,11 @@ function deactivateInvalidExtensionContext(error) {
     )) return;
     extensionContextActive = false;
     currentProcessorEpoch = null;
+    isLocalProcessor = false;
+    if (monitorHeartbeatTimer) {
+        clearInterval(monitorHeartbeatTimer);
+        monitorHeartbeatTimer = null;
+    }
     window.removeEventListener('TWITTER_WS_MSG_RECEIVED', handleTwitterMsg);
     window.removeEventListener('GMGN_WALLET_MSG', handleWalletMsg);
     try {
@@ -126,8 +135,91 @@ function normalizeWalletEnvelope(detail) {
     return { item: detail, wssReceivedAt: Date.now() };
 }
 
+function isPageVisibleNow() {
+    try {
+        return typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    } catch (error) {
+        return true;
+    }
+}
+
+function applyProcessorRole(isProcessor, epoch) {
+    const nextIsProcessor = isProcessor === true;
+    const changed = isLocalProcessor !== nextIsProcessor;
+    isLocalProcessor = nextIsProcessor;
+    if (isLocalProcessor) {
+        if (Number.isFinite(Number(epoch))) currentProcessorEpoch = Number(epoch);
+    } else {
+        currentProcessorEpoch = null;
+    }
+    if (changed) {
+        debugLog(`🎛️ [GMGN 盯盘伴侣] 上报角色 → ${isLocalProcessor ? 'ACTIVE(播放/全量上报)' : 'SILENT(仅心跳)'}`);
+    }
+}
+
+function canSubmitMonitorEvents() {
+    return isLocalProcessor && hasLiveExtensionContext();
+}
+
+/**
+ * 注册/刷新协调器角色。
+ * preferProcessor：前台切回时请求接管播报权。
+ */
+function registerWithCoordinator(options = {}) {
+    return new Promise((resolve) => {
+        if (!hasLiveExtensionContext()) {
+            resolve(null);
+            return;
+        }
+        const payload = {
+            type: options.heartbeat ? 'GMGN_MONITOR_HEARTBEAT' : 'GMGN_REGISTER_MONITOR',
+            preferProcessor: options.preferProcessor === true,
+            visible: options.visible === undefined ? isPageVisibleNow() : options.visible === true
+        };
+        try {
+            chrome.runtime.sendMessage(payload, (response) => {
+                if (chrome.runtime.lastError) {
+                    reportExtensionMessageFailure(
+                        options.heartbeat ? '监控心跳失败' : '注册监控 Tab 失败',
+                        chrome.runtime.lastError
+                    );
+                    resolve(null);
+                    return;
+                }
+                if (response && response.ok) {
+                    applyProcessorRole(
+                        response.isProcessor,
+                        response.processor && response.processor.epoch
+                    );
+                }
+                resolve(response || null);
+            });
+        } catch (error) {
+            reportExtensionMessageFailure(
+                options.heartbeat ? '监控心跳失败' : '注册监控 Tab 失败',
+                error
+            );
+            resolve(null);
+        }
+    });
+}
+
+function sendMonitorHeartbeat() {
+    registerWithCoordinator({
+        heartbeat: true,
+        preferProcessor: false,
+        visible: isPageVisibleNow()
+    });
+}
+
+function startMonitorHeartbeat() {
+    if (monitorHeartbeatTimer) clearInterval(monitorHeartbeatTimer);
+    monitorHeartbeatTimer = setInterval(sendMonitorHeartbeat, MONITOR_HEARTBEAT_MS);
+}
+
 function submitMonitorEvent(kind, eventId, payload) {
-    if (!hasLiveExtensionContext()) return;
+    // 非 Processor Tab 静默：不进入 Background 串行链，从源头去掉 N 倍负载
+    if (!canSubmitMonitorEvents()) return;
     try {
         chrome.runtime.sendMessage({
             type: 'GMGN_INGEST_EVENT',
@@ -141,6 +233,9 @@ function submitMonitorEvent(kind, eventId, payload) {
             }
             if (!response || !response.ok) {
                 reportExtensionMessageFailure('事件未被协调器接收', response && response.error);
+            } else if (response.isProcessor === false) {
+                // 协调器已切换角色时，立刻收敛本地状态
+                applyProcessorRole(false, null);
             }
         });
     } catch (error) {
@@ -2131,11 +2226,12 @@ document.addEventListener('visibilitychange', () => {
     const now = Date.now();
     const hiddenDuration = now - lastVisibilityChangeTime;
 
-    // 👁️ 前台/后台切换：立即调整 Leader 归属（不依赖 5 分钟休眠逻辑）
+    // 👁️ 前台/后台切换：前台请求接管 Processor；后台仅刷新存活信息
     if (document.visibilityState === 'hidden') {
         if (LEGACY_TAB_LEADER_ENABLED) {
             try { TabLeader.onVisibilityHidden(); } catch (e) { /* ignore */ }
         }
+        registerWithCoordinator({ preferProcessor: false, visible: false, heartbeat: true });
     } else if (document.visibilityState === 'visible') {
         try {
             // 回到前台时尝试恢复 AudioContext（后台常被浏览器挂起）
@@ -2144,6 +2240,12 @@ document.addEventListener('visibilitychange', () => {
             }
             if (LEGACY_TAB_LEADER_ENABLED) TabLeader.onVisibilityVisible();
         } catch (e) { /* ignore */ }
+        // 切回前台：请求成为唯一播放/全量上报 Tab
+        registerWithCoordinator({ preferProcessor: true, visible: true }).then((response) => {
+            if (response && response.isProcessor) {
+                requestOffscreenWarmup().catch(() => {});
+            }
+        });
     }
 
     // 只有当页面隐藏超过 5 分钟（300000ms）才认为可能是休眠，否则只是普通的标签切换
@@ -2953,6 +3055,8 @@ function handleTwitterMsg(e) {
     const detail = e && e.detail ? e.detail : {};
     const triggers = Array.isArray(detail.triggers) ? detail.triggers : [];
     if (!e || e.__gmgnCoordinated !== true) {
+        // 非播放 Tab：静默丢弃本机 WSS 副本，避免多开 N 倍压垮协调链
+        if (!canSubmitMonitorEvents()) return;
         const eventId = detail.eventId || `twitter_fallback_${hashMonitorPayload(triggers)}`;
         const semanticKey = detail.semanticKey || `twitter_semantic_${hashMonitorPayload(
             triggers.map((trigger) => ({
@@ -3231,6 +3335,8 @@ async function handleWalletMsg(e) {
         if (!item) return;
         // 高频 transferOut/transferIn/callOut 等与播报无关，不写日志也不进入 Background 串行链。
         if (item.s !== 'buy' && item.s !== 'sell') return;
+        // 非播放 Tab：静默，不写诊断、不上报，只靠心跳维持候选资格
+        if (!canSubmitMonitorEvents()) return;
         if (isCacheReady && !isWalletChainEnabled(item, configCache.walletFilters && configCache.walletFilters.walletChains)) {
             logWalletSkip('该链播报未启用', item, { chain: item.n || '' });
             return;
@@ -3653,6 +3759,16 @@ window.addEventListener('GMGN_WALLET_MSG', handleWalletMsg);
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg) return false;
     if (msg.type === 'GMGN_PROCESSOR_PING') {
+        // 被点名说明本 Tab 仍是候选/Processor，顺带刷新本地角色
+        if (!isLocalProcessor) applyProcessorRole(true, currentProcessorEpoch);
+        sendResponse({ ok: true });
+        return false;
+    }
+    if (msg.type === 'GMGN_PROCESSOR_ROLE') {
+        applyProcessorRole(msg.isProcessor === true, msg.processorEpoch);
+        if (msg.isProcessor === true) {
+            requestOffscreenWarmup().catch(() => {});
+        }
         sendResponse({ ok: true });
         return false;
     }
@@ -3662,7 +3778,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return false;
     }
 
-    currentProcessorEpoch = Number(msg.processorEpoch);
+    // 收到派发即成为（或保持）Processor，并开启全量上报
+    applyProcessorRole(true, msg.processorEpoch);
     applyCoordinatorRuntimeState(msg.runtimeState);
     const processing = msg.kind === 'twitter'
         ? Promise.resolve().then(() => handleTwitterMsg({
@@ -3694,22 +3811,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 if (hasLiveExtensionContext()) {
-    try {
-        chrome.runtime.sendMessage({ type: 'GMGN_REGISTER_MONITOR' }, (response) => {
-            if (chrome.runtime.lastError) {
-                reportExtensionMessageFailure('注册监控 Tab 失败', chrome.runtime.lastError);
-                return;
-            }
-            if (response && response.isProcessor && response.processor) {
-                currentProcessorEpoch = Number(response.processor.epoch);
-            }
+    // 前台优先争抢 Processor；后台仅登记为静默候选
+    registerWithCoordinator({
+        preferProcessor: isPageVisibleNow(),
+        visible: isPageVisibleNow()
+    }).then((response) => {
+        startMonitorHeartbeat();
+        if (response && response.isProcessor) {
             requestOffscreenWarmup().then((result) => {
                 if (result && result.ok === false && result.error && !isExpectedExtensionError(result.error)) {
                     console.warn('[GMGN 盯盘伴侣] Offscreen 初始化失败:', result.error);
                 }
             });
-        });
-    } catch (error) {
-        reportExtensionMessageFailure('注册监控 Tab 失败', error);
-    }
+        }
+    });
 }

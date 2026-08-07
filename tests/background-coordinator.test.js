@@ -316,6 +316,10 @@ test('discarding the processor immediately replays pending work on another tab',
             callback({ ok: true });
             return;
         }
+        if (message.type === 'GMGN_PROCESSOR_ROLE') {
+            callback({ ok: true });
+            return;
+        }
         deliveries.push({ tabId, eventId: message.eventId, replayed: message.replayed === true });
         callback({
             ok: true,
@@ -343,4 +347,65 @@ test('discarding the processor immediately replays pending work on another tab',
     assert.equal(snapshot.processor.tabId, 12);
     assert.deepEqual(snapshot.pending, []);
     assert.equal(snapshot.seen[0][0], 'twitter_discard');
+});
+
+test('foreground preferProcessor takes over from sticky background processor', async () => {
+    const harness = createBackgroundHarness();
+    const backgroundSender = { tab: { id: 101 }, documentId: 'doc-101' };
+    const foregroundSender = { tab: { id: 102 }, documentId: 'doc-102' };
+
+    harness.setTabsSendHandler((_tabId, message, callback) => {
+        if (message.type === 'GMGN_PROCESSOR_PING' || message.type === 'GMGN_PROCESSOR_ROLE') {
+            callback({ ok: true });
+            return;
+        }
+        callback({ ok: true, disposition: 'complete', runtimeState: {} });
+    });
+
+    const first = await harness.dispatch({
+        type: 'GMGN_REGISTER_MONITOR',
+        visible: false,
+        preferProcessor: false
+    }, backgroundSender);
+    const second = await harness.dispatch({
+        type: 'GMGN_REGISTER_MONITOR',
+        visible: true,
+        preferProcessor: true
+    }, foregroundSender);
+
+    assert.equal(first.ok, true);
+    assert.equal(first.isProcessor, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.isProcessor, true);
+    assert.equal(second.processor.tabId, 102);
+    assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor.tabId, 102);
+});
+
+test('silent heartbeat does not steal a fresh processor', async () => {
+    const harness = createBackgroundHarness();
+    const processorSender = { tab: { id: 201 }, documentId: 'doc-201' };
+    const silentSender = { tab: { id: 202 }, documentId: 'doc-202' };
+
+    harness.setTabsSendHandler((_tabId, message, callback) => {
+        if (message.type === 'GMGN_PROCESSOR_PING' || message.type === 'GMGN_PROCESSOR_ROLE') {
+            callback({ ok: true });
+            return;
+        }
+        callback({ ok: true, disposition: 'complete', runtimeState: {} });
+    });
+
+    await harness.dispatch({
+        type: 'GMGN_REGISTER_MONITOR',
+        visible: true,
+        preferProcessor: true
+    }, processorSender);
+    const heartbeat = await harness.dispatch({
+        type: 'GMGN_MONITOR_HEARTBEAT',
+        visible: false,
+        preferProcessor: false
+    }, silentSender);
+
+    assert.equal(heartbeat.ok, true);
+    assert.equal(heartbeat.isProcessor, false);
+    assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor.tabId, 201);
 });
