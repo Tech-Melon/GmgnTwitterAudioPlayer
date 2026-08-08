@@ -2648,8 +2648,14 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
             if (onComplete) onComplete({ ok: false, error: getExtensionErrorMessage(error) });
             return;
         }
-        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 分段准备或播放失败，降级到默认提示音:", error && (error.message || error));
-        const fallbackAudio = source === 'wallet' ? 'sounds/preset1.MP3' : (configCache.defaultAudio || 'sounds/default.MP3');
+        // 钱包：preset1 等文件可能是「推特新消息」人声，失败时只播纯音「滴」，避免语义误导
+        if (source === 'wallet') {
+            console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 钱包播报失败，降级为短滴提示音:", error && (error.message || error));
+            playViaOffscreen('tts', [{ kind: 'beep' }], targetVolume, onComplete, source, traceContext);
+            return;
+        }
+        console.warn("⚠️ [GMGN 盯盘伴侣 - TTS] 推特播报失败，降级到默认提示音:", error && (error.message || error));
+        const fallbackAudio = configCache.defaultAudio || 'sounds/default.MP3';
         playChannelAudio(chrome.runtime.getURL(fallbackAudio), 'tts', source, null, onComplete);
     };
 
