@@ -15,13 +15,18 @@ let sharedAudioCtx = null; // 🌟 全局共享 AudioContext（必须在 _unlock
 let currentProcessorEpoch = null;
 /** 仅 Processor Tab 全量上报事件；其它 Tab 静默 + 心跳 */
 let isLocalProcessor = false;
+/** 是否已从协调器拿到过角色（避免启动窗口 ready=true 却 isProcessor=false 导致 MAIN 层误丢事件） */
+let processorRoleKnown = false;
 let monitorHeartbeatTimer = null;
 const MONITOR_HEARTBEAT_MS = 8000;
 const LEGACY_TAB_LEADER_ENABLED = false;
 const LEGACY_CROSS_TAB_DEDUP_ENABLED = false;
 const coordinatorScheduledEventIds = new Set();
 const TWITTER_EVENT_TTL_MS = 2 * 60 * 1000;
-const WALLET_EVENT_TTL_MS = 6 * 1000;
+/** 钱包新鲜度：过短会在 TTS 排队时误杀；15s 兼顾实时性与抗洪峰 */
+const WALLET_EVENT_TTL_MS = 15 * 1000;
+let staleProcessorStreak = 0;
+let contextInvalidBannerEl = null;
 const hashMonitorPayload = GmgnWalletEvent.hashPayload;
 const buildWalletEventId = GmgnWalletEvent.buildEventId;
 const buildWalletTransactionKey = GmgnWalletEvent.buildTransactionKey;
@@ -66,6 +71,39 @@ function hasLiveExtensionContext() {
         && !!chrome.runtime.id;
 }
 
+function showContextInvalidBanner() {
+    if (contextInvalidBannerEl && contextInvalidBannerEl.isConnected) return;
+    try {
+        const banner = document.createElement('div');
+        banner.id = 'gmgn-audio-context-invalid-banner';
+        banner.textContent = 'GMGN 盯盘伴侣：扩展已更新或失效，请刷新本页以恢复播报';
+        banner.style.cssText = [
+            'position:fixed',
+            'top:12px',
+            'left:50%',
+            'transform:translateX(-50%)',
+            'z-index:2147483647',
+            'padding:10px 16px',
+            'border-radius:10px',
+            'background:rgba(180,40,40,0.94)',
+            'color:#fff',
+            'font:600 13px/1.4 system-ui,sans-serif',
+            'box-shadow:0 8px 24px rgba(0,0,0,0.28)',
+            'cursor:pointer',
+            'max-width:min(92vw,520px)',
+            'text-align:center'
+        ].join(';');
+        banner.title = '点击刷新页面';
+        banner.addEventListener('click', () => {
+            try { location.reload(); } catch (reloadError) { /* ignore */ }
+        });
+        (document.documentElement || document.body).appendChild(banner);
+        contextInvalidBannerEl = banner;
+    } catch (domError) {
+        // DOM 不可用时仅依赖 console 提示
+    }
+}
+
 function deactivateInvalidExtensionContext(error) {
     const message = getExtensionErrorMessage(error).toLowerCase();
     if (!message || (
@@ -78,6 +116,7 @@ function deactivateInvalidExtensionContext(error) {
     extensionContextActive = false;
     currentProcessorEpoch = null;
     isLocalProcessor = false;
+    processorRoleKnown = false;
     if (monitorHeartbeatTimer) {
         clearInterval(monitorHeartbeatTimer);
         monitorHeartbeatTimer = null;
@@ -89,6 +128,27 @@ function deactivateInvalidExtensionContext(error) {
     } catch (closeError) {
         // Context teardown is best-effort.
     }
+    syncInjectFilters();
+    showContextInvalidBanner();
+    console.warn('🔄 [GMGN 盯盘伴侣] 插件上下文已失效，请刷新页面以恢复监控！');
+}
+
+/** 连续 stale_processor 时主动弃权并重新争抢，避免静音到刷新 */
+function handleStaleProcessorSignal(reason) {
+    staleProcessorStreak += 1;
+    debugLog('⚠️ [GMGN 盯盘伴侣] stale_processor:', reason, 'streak=', staleProcessorStreak);
+    if (staleProcessorStreak < 2) return;
+    staleProcessorStreak = 0;
+    applyProcessorRole(false, null);
+    if (!hasLiveExtensionContext()) return;
+    registerWithCoordinator({
+        preferProcessor: isPageVisibleNow(),
+        visible: isPageVisibleNow()
+    }).then((response) => {
+        if (response && response.isProcessor) {
+            requestOffscreenWarmup().catch(() => {});
+        }
+    });
 }
 
 function reportExtensionMessageFailure(label, error) {
@@ -146,14 +206,21 @@ function isPageVisibleNow() {
 function applyProcessorRole(isProcessor, epoch) {
     const nextIsProcessor = isProcessor === true;
     const changed = isLocalProcessor !== nextIsProcessor;
+    const prevEpoch = currentProcessorEpoch;
+    const firstRole = processorRoleKnown !== true;
+    processorRoleKnown = true;
     isLocalProcessor = nextIsProcessor;
     if (isLocalProcessor) {
         if (Number.isFinite(Number(epoch))) currentProcessorEpoch = Number(epoch);
+        staleProcessorStreak = 0;
     } else {
         currentProcessorEpoch = null;
     }
-    if (changed) {
-        debugLog(`🎛️ [GMGN 盯盘伴侣] 上报角色 → ${isLocalProcessor ? 'ACTIVE(播放/全量上报)' : 'SILENT(仅心跳)'}`);
+    if (changed || firstRole || prevEpoch !== currentProcessorEpoch) {
+        debugLog(`🎛️ [GMGN 盯盘伴侣] 上报角色 → ${isLocalProcessor ? 'ACTIVE(播放/全量上报)' : 'SILENT(仅心跳)'}`, {
+            epoch: currentProcessorEpoch
+        });
+        syncInjectFilters();
     }
 }
 
@@ -225,17 +292,27 @@ function submitMonitorEvent(kind, eventId, payload) {
             type: 'GMGN_INGEST_EVENT',
             kind,
             eventId,
-            payload
+            payload,
+            processorEpoch: currentProcessorEpoch
         }, (response) => {
             if (chrome.runtime.lastError) {
                 reportExtensionMessageFailure('事件上报失败', chrome.runtime.lastError);
                 return;
             }
             if (!response || !response.ok) {
-                reportExtensionMessageFailure('事件未被协调器接收', response && response.error);
-            } else if (response.isProcessor === false) {
+                const err = response && response.error;
+                if (err === 'stale_processor') {
+                    handleStaleProcessorSignal('ingest');
+                    return;
+                }
+                reportExtensionMessageFailure('事件未被协调器接收', err);
+                return;
+            }
+            if (response.not_processor === true || response.isProcessor === false) {
                 // 协调器已切换角色时，立刻收敛本地状态
                 applyProcessorRole(false, null);
+            } else if (response.isProcessor === true && Number.isFinite(Number(response.processorEpoch))) {
+                applyProcessorRole(true, response.processorEpoch);
             }
         });
     } catch (error) {
@@ -289,7 +366,13 @@ function notifyCoordinatorComplete(eventIds) {
             if (chrome.runtime.lastError) {
                 reportExtensionMessageFailure('事件完成回报失败', chrome.runtime.lastError);
             } else if (response && response.ok === false) {
-                reportExtensionMessageFailure('事件完成回报被拒绝', response.error);
+                if (response.error === 'stale_processor') {
+                    handleStaleProcessorSignal('event_complete');
+                } else {
+                    reportExtensionMessageFailure('事件完成回报被拒绝', response.error);
+                }
+            } else if (response && response.ok === true) {
+                staleProcessorStreak = 0;
             }
         });
     } catch (error) {
@@ -943,6 +1026,37 @@ function syncChannelToggles() {
     window.dispatchEvent(new CustomEvent('GMGN_AUDIO_TOGGLE', { detail: { enabled: master } }));
     window.dispatchEvent(new CustomEvent('GMGN_CHANNEL_TOGGLE', {
         detail: { master, twitter, wallet }
+    }));
+    syncInjectFilters();
+}
+
+/**
+ * 向 MAIN world 同步轻量过滤配置：
+ * - 非 Processor 直接不派发
+ * - 链/屏蔽币/字典地址在 inject 层丢弃，避免进入 content 与协调链
+ */
+function syncInjectFilters() {
+    const dict = configCache.walletDictionary && typeof configCache.walletDictionary === 'object'
+        ? configCache.walletDictionary
+        : {};
+    const walletAddrs = Object.keys(dict)
+        .map((addr) => String(addr || '').trim().toLowerCase())
+        .filter(Boolean);
+    const wf = configCache.walletFilters || {};
+    const walletChains = Array.isArray(wf.walletChains) ? wf.walletChains : null;
+    const blockedTokens = Array.isArray(wf.blockedTokenSymbols) ? wf.blockedTokenSymbols : [];
+    window.dispatchEvent(new CustomEvent('GMGN_FILTER_SYNC', {
+        detail: {
+            ready: isCacheReady === true,
+            roleKnown: processorRoleKnown === true,
+            isProcessor: isLocalProcessor === true,
+            master: configCache.isMasterEnabled !== false,
+            twitter: configCache.enableTwitter !== false,
+            wallet: configCache.enableWallet !== false,
+            walletChains,
+            blockedTokens,
+            walletAddrs
+        }
     }));
 }
 
@@ -1645,7 +1759,7 @@ const DynamicPlaybackScheduler = {
                 this._isPlaying = false;
                 this.releaseAndNext();
             }
-        }, 30000);
+        }, 20000);
     },
 
     /**
@@ -1930,7 +2044,13 @@ function requestOffscreenPlay(channel, items, volume, source = 'twitter', diagno
                         resolve({ ok: false, error: chrome.runtime.lastError.message });
                         return;
                     }
-                    resolve(resp || { ok: false, error: 'no_response' });
+                    const result = resp || { ok: false, error: 'no_response' };
+                    if (result && result.ok === false && result.error === 'stale_processor') {
+                        handleStaleProcessorSignal('offscreen_play');
+                    } else if (result && result.ok === true) {
+                        staleProcessorStreak = 0;
+                    }
+                    resolve(result);
                 }
             );
         } catch (e) {
@@ -2346,6 +2466,7 @@ function syncDebugToggle() {
 function syncWsBlocklist() {
     const channels = Array.isArray(configCache.blockedWsChannels) ? configCache.blockedWsChannels : [];
     window.dispatchEvent(new CustomEvent('GMGN_WS_BLOCKLIST', { detail: { channels } }));
+    syncInjectFilters();
 }
 
 function convertBase64ToBlobUrl(customAudiosObj) {
@@ -2476,10 +2597,11 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     initPreloadCache();
     // warmupTTSVoice(); 已废弃，现采用双层缓存网络 TTS
 
+    isCacheReady = true;
     syncChannelToggles();
     syncWsBlocklist();
     syncDebugToggle();
-    isCacheReady = true;
+    syncInjectFilters();
 
     debugLog("⚙️ [GMGN 盯盘伴侣] 配置加载完成:", {
         mappingCount: Object.keys(configCache.mappings).length,
@@ -2570,8 +2692,14 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.walletTts) {
             configCache.walletTts = normalizeTtsConfig(changes.walletTts.newValue);
         }
-        if (changes.walletFilters) configCache.walletFilters = changes.walletFilters.newValue;
-        if (changes.walletDictionary) configCache.walletDictionary = changes.walletDictionary.newValue;
+        if (changes.walletFilters) {
+            configCache.walletFilters = changes.walletFilters.newValue;
+            syncInjectFilters();
+        }
+        if (changes.walletDictionary) {
+            configCache.walletDictionary = changes.walletDictionary.newValue;
+            syncInjectFilters();
+        }
         if (changes.customAudios) {
             const oldAudios = configCache.customAudios;
             for (const key in oldAudios) {
@@ -3765,9 +3893,12 @@ window.addEventListener('GMGN_WALLET_MSG', handleWalletMsg);
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg) return false;
     if (msg.type === 'GMGN_PROCESSOR_PING') {
-        // 被点名说明本 Tab 仍是候选/Processor，顺带刷新本地角色
-        if (!isLocalProcessor) applyProcessorRole(true, currentProcessorEpoch);
-        sendResponse({ ok: true });
+        // PING 仅探活，绝不升权。误升权会导致多 Tab 同时全量上报，最终卡死/静音。
+        sendResponse({
+            ok: true,
+            isProcessor: isLocalProcessor === true,
+            processorEpoch: currentProcessorEpoch
+        });
         return false;
     }
     if (msg.type === 'GMGN_PROCESSOR_ROLE') {

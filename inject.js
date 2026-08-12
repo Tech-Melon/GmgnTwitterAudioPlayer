@@ -8,22 +8,26 @@
         if (window.__GMGN_DEBUG_LOGGING === true) console.log(...args);
     };
 
-    // 动态拼接版本号 (由于改为 world: MAIN 注入，无法直接读取 script.dataset，改为静态显示)
-    debugLog(`🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (注入机制优化版)`);
+    debugLog(`🚀 [GMGN 盯盘伴侣] Inject.js 已启动 (轻量过滤版)`);
 
     // 🛡️ 幂等保护：扩展热更新时 inject.js 会被多次注入
     // 必须始终使用真正的原生 WebSocket，而不是上一次注入留下的代理
-    // 否则会形成「代理套代理」导致信号丢失或重复
     if (!window.__GMGN_ORIGINAL_WS) {
-        window.__GMGN_ORIGINAL_WS = window.WebSocket; // 首次注入：保存原生构造函数
+        window.__GMGN_ORIGINAL_WS = window.WebSocket;
     }
-    const OriginalWebSocket = window.__GMGN_ORIGINAL_WS; // 始终引用真正的原生 WS
+    const OriginalWebSocket = window.__GMGN_ORIGINAL_WS;
 
-    // 插件自身依赖的频道，禁止误拦
     const PROTECTED_CHANNELS = new Set([
         'twitter_user_monitor_basic',
         'following_wallet_activity'
     ]);
+
+    // 钱包播报必需字段：丢弃头像/URL/无关数值，降低 CustomEvent 克隆成本
+    const WALLET_KEEP_KEYS = [
+        's', 'n', 'cnt', 'm', 'h', 'bs', 'ba', 'a',
+        'cu', 'au', 'pu', 'bts', 'bct', 'ts', 'ooc',
+        'id', 'si', 'nm'
+    ];
 
     function hashWsPayload(value) {
         let hash = 2166136261;
@@ -34,12 +38,25 @@
         return (hash >>> 0).toString(36);
     }
 
-    window.__GMGN_AUDIO_ENABLED = true;       // 总开关
-    window.__GMGN_ENABLE_TWITTER = true;      // 推特通道
-    window.__GMGN_ENABLE_WALLET = true;       // 钱包通道
+    window.__GMGN_AUDIO_ENABLED = true;
+    window.__GMGN_ENABLE_TWITTER = true;
+    window.__GMGN_ENABLE_WALLET = true;
     window.__GMGN_WS_BLOCKLIST = window.__GMGN_WS_BLOCKLIST instanceof Set
         ? window.__GMGN_WS_BLOCKLIST
         : new Set();
+
+    // 轻量过滤状态（由 content 同步）。ready=false 时不做字典/链过滤，避免启动窗口漏报。
+    window.__GMGN_FILTER = {
+        ready: false,
+        roleKnown: false,
+        isProcessor: false,
+        master: true,
+        twitter: true,
+        wallet: true,
+        walletChains: null,
+        blockedTokens: new Set(),
+        walletAddrs: null
+    };
 
     window.addEventListener('GMGN_AUDIO_TOGGLE', function (e) {
         window.__GMGN_AUDIO_ENABLED = !!(e.detail && e.detail.enabled);
@@ -49,12 +66,17 @@
         window.__GMGN_DEBUG_LOGGING = !!(e.detail && e.detail.enabled);
     });
 
-    // content.js 同步：总开关 + 推特/钱包通道（修复单独关通道仍派发事件）
     window.addEventListener('GMGN_CHANNEL_TOGGLE', function (e) {
         const d = e.detail || {};
         if (typeof d.master === 'boolean') window.__GMGN_AUDIO_ENABLED = d.master;
         if (typeof d.twitter === 'boolean') window.__GMGN_ENABLE_TWITTER = d.twitter;
         if (typeof d.wallet === 'boolean') window.__GMGN_ENABLE_WALLET = d.wallet;
+        const filter = window.__GMGN_FILTER;
+        if (filter) {
+            if (typeof d.master === 'boolean') filter.master = d.master;
+            if (typeof d.twitter === 'boolean') filter.twitter = d.twitter;
+            if (typeof d.wallet === 'boolean') filter.wallet = d.wallet;
+        }
         debugLog('🎚️ [GMGN 盯盘伴侣 - Inject] 通道开关:', {
             master: window.__GMGN_AUDIO_ENABLED,
             twitter: window.__GMGN_ENABLE_TWITTER,
@@ -75,13 +97,102 @@
         debugLog(`🛡️ [GMGN 盯盘伴侣 - Inject] WSS 屏蔽列表已更新 (${next.size}):`, Array.from(next));
     });
 
+    window.addEventListener('GMGN_FILTER_SYNC', function (e) {
+        const d = e.detail || {};
+        const nextChains = Array.isArray(d.walletChains)
+            ? new Set(d.walletChains.map((c) => String(c || '').trim().toLowerCase()).filter(Boolean))
+            : null;
+        const nextBlocked = new Set(
+            (Array.isArray(d.blockedTokens) ? d.blockedTokens : [])
+                .map((t) => String(t || '').trim().toLowerCase())
+                .filter(Boolean)
+        );
+        const nextAddrs = Array.isArray(d.walletAddrs)
+            ? new Set(d.walletAddrs.map((a) => String(a || '').trim().toLowerCase()).filter(Boolean))
+            : null;
+        window.__GMGN_FILTER = {
+            ready: d.ready !== false,
+            roleKnown: d.roleKnown === true,
+            isProcessor: d.isProcessor === true,
+            master: d.master !== false,
+            twitter: d.twitter !== false,
+            wallet: d.wallet !== false,
+            walletChains: nextChains && nextChains.size > 0 ? nextChains : null,
+            blockedTokens: nextBlocked,
+            walletAddrs: nextAddrs && nextAddrs.size > 0 ? nextAddrs : null
+        };
+        if (typeof d.master === 'boolean') window.__GMGN_AUDIO_ENABLED = d.master;
+        if (typeof d.twitter === 'boolean') window.__GMGN_ENABLE_TWITTER = d.twitter;
+        if (typeof d.wallet === 'boolean') window.__GMGN_ENABLE_WALLET = d.wallet;
+        debugLog('🎛️ [GMGN 盯盘伴侣 - Inject] 过滤状态同步:', {
+            isProcessor: window.__GMGN_FILTER.isProcessor,
+            chains: window.__GMGN_FILTER.walletChains ? window.__GMGN_FILTER.walletChains.size : 0,
+            blocked: window.__GMGN_FILTER.blockedTokens.size,
+            wallets: window.__GMGN_FILTER.walletAddrs ? window.__GMGN_FILTER.walletAddrs.size : 0
+        });
+    });
+
+    function isGmgnMonitorWsUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        try {
+            const parsed = new URL(url);
+            if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return false;
+            const host = String(parsed.hostname || '').toLowerCase();
+            return host === 'ws.gmgn.ai'
+                || host === 'gmgn.ai'
+                || host.endsWith('.gmgn.ai');
+        } catch (error) {
+            const lower = url.toLowerCase();
+            return lower.includes('gmgn.ai') && (lower.includes('/ws') || lower.includes('ws.'));
+        }
+    }
+
+    function slimWalletItem(item) {
+        if (!item || typeof item !== 'object') return null;
+        const slim = {};
+        for (let i = 0; i < WALLET_KEEP_KEYS.length; i++) {
+            const key = WALLET_KEEP_KEYS[i];
+            const value = item[key];
+            if (value === undefined || value === null || value === '') continue;
+            slim[key] = value;
+        }
+        return slim.s ? slim : null;
+    }
+
+    function normalizeChainId(chain) {
+        const normalized = String(chain || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        if (normalized === 'solana') return 'sol';
+        if (normalized === 'ethereum') return 'eth';
+        if (normalized === 'binance' || normalized === 'binancesmartchain') return 'bsc';
+        return normalized;
+    }
+
+    function shouldDropWalletItem(item) {
+        if (!item || (item.s !== 'buy' && item.s !== 'sell')) return true;
+        const filter = window.__GMGN_FILTER;
+        if (!filter || filter.ready !== true) return false;
+
+        if (filter.walletChains) {
+            const chain = normalizeChainId(item.n);
+            if (!chain || !filter.walletChains.has(chain)) return true;
+        }
+        if (filter.blockedTokens && filter.blockedTokens.size > 0) {
+            const token = String(item.bs || '').trim().toLowerCase();
+            if (token && filter.blockedTokens.has(token)) return true;
+        }
+        if (filter.walletAddrs) {
+            const maker = String(item.m || '').trim().toLowerCase();
+            if (!maker || !filter.walletAddrs.has(maker)) return true;
+        }
+        return false;
+    }
+
     /**
      * 解析 subscribe 消息中的 channel 名
      * 兼容：纯 JSON / 前缀数字帧 / Socket.IO 风格
      */
     function extractSubscribeChannel(raw) {
         if (typeof raw !== 'string' || raw.length === 0) return null;
-        // 快速路径：非 subscribe 直接跳过
         if (raw.indexOf('subscribe') === -1) return null;
 
         try {
@@ -99,11 +210,26 @@
         return null;
     }
 
-    window.WebSocket = function (url, protocols) {
-        debugLog(`🔗 [GMGN 盯盘伴侣 - Inject] 成功捕获 WebSocket 连接创建:`, url);
-        const ws = new OriginalWebSocket(url, protocols);
+    function looksLikeWalletTrade(raw) {
+        // 快速路径：未出现 buy/sell 字面量则无需 JSON.parse
+        return raw.indexOf('"s":"buy"') !== -1
+            || raw.indexOf('"s":"sell"') !== -1
+            || raw.indexOf('"s": "buy"') !== -1
+            || raw.indexOf('"s": "sell"') !== -1;
+    }
 
-        // ── 出站：拦截黑名单频道的 subscribe ──
+    window.WebSocket = function (url, protocols) {
+        const monitorThisSocket = isGmgnMonitorWsUrl(url);
+        if (monitorThisSocket) {
+            debugLog(`🔗 [GMGN 盯盘伴侣 - Inject] 捕获 GMGN WebSocket:`, url);
+        }
+        const ws = protocols !== undefined
+            ? new OriginalWebSocket(url, protocols)
+            : new OriginalWebSocket(url);
+
+        // 非 GMGN 业务 WS（Intercom 等）：不挂监听、不改 send
+        if (!monitorThisSocket) return ws;
+
         const originalSend = ws.send.bind(ws);
         ws.send = function (data) {
             const channel = extractSubscribeChannel(data);
@@ -114,19 +240,26 @@
             return originalSend(data);
         };
 
-        // ── 入站：仅监听推特 / 钱包监控频道 ──
         ws.addEventListener('message', function (event) {
-            // 热更新或重复注入后，旧代际监听器立即失效，避免同一 WSS 被重复转发。
             if (window.__GMGN_AUDIO_INJECT_GENERATION !== injectionGeneration) return;
             const wssReceivedAt = Date.now();
             if (!window.__GMGN_AUDIO_ENABLED) return;
+
+            // 非 Processor Tab：MAIN 世界直接丢弃，避免 N 倍 CustomEvent + content 处理
+            // roleKnown 之前不按角色丢弃，避免注册完成前的启动空窗漏报
+            const filter = window.__GMGN_FILTER;
+            if (filter
+                && filter.ready === true
+                && filter.roleKnown === true
+                && filter.isProcessor !== true) return;
+
             if (typeof event.data !== 'string') return;
             const isTwitter = event.data.includes('twitter_user_monitor_basic');
             const isWallet = event.data.includes('following_wallet_activity');
             if (!isTwitter && !isWallet) return;
-            // 通道级拦截：关推特/钱包时不再向 content 派发
             if (isTwitter && !window.__GMGN_ENABLE_TWITTER) return;
             if (isWallet && !window.__GMGN_ENABLE_WALLET) return;
+            if (isWallet && !looksLikeWalletTrade(event.data)) return;
 
             try {
                 let payloadStr = event.data.replace(/^\d+/, '');
@@ -140,16 +273,13 @@
                     if (!window.__GMGN_ENABLE_TWITTER) return;
 
                     const triggersMap = new Map();
-
-                    parsed.data.forEach(tweetData => {
+                    parsed.data.forEach((tweetData) => {
                         if (!tweetData) return;
                         const actionType = tweetData.tw || 'unknown';
-
-                        // 🎯 核心修正：提取推特 ID (u.s) 和显示名称 (u.n)，用于 TTS 播报
                         if (tweetData.u && tweetData.u.s) {
                             triggersMap.set(tweetData.u.s, {
-                                actionType: actionType,
-                                displayName: tweetData.u.n || tweetData.u.s // 优先使用显示名称，降级使用 ID
+                                actionType,
+                                displayName: tweetData.u.n || tweetData.u.s
                             });
                         }
                     });
@@ -175,28 +305,27 @@
                     }
                 } else if (parsed && parsed.channel === 'following_wallet_activity' && parsed.data && Array.isArray(parsed.data)) {
                     if (!window.__GMGN_ENABLE_WALLET) return;
-                    parsed.data.forEach(item => {
-                        // 仅买入/卖出会触发播报；transferOut 等高频状态在 MAIN World 就地丢弃。
-                        if (!item || (item.s !== 'buy' && item.s !== 'sell')) return;
-                        // 取消 cnt === "processed" 的过滤，交由 content.js 基于 txHash 进行去重，防止部分交易只有 confirm 导致漏播
+                    parsed.data.forEach((item) => {
+                        if (shouldDropWalletItem(item)) return;
+                        const slim = slimWalletItem(item);
+                        if (!slim) return;
                         window.dispatchEvent(new CustomEvent('GMGN_WALLET_MSG', {
                             detail: {
                                 __gmgnWalletEnvelope: true,
-                                item,
+                                item: slim,
                                 wssReceivedAt
                             }
                         }));
                     });
                 }
             } catch (error) {
-                console.error("❌ [GMGN 盯盘伴侣 - Inject] 数据解析异常:", error, event.data);
+                console.error('❌ [GMGN 盯盘伴侣 - Inject] 数据解析异常:', error);
             }
         });
 
         return ws;
     };
     window.WebSocket.prototype = OriginalWebSocket.prototype;
-    // 保留静态常量（CONNECTING/OPEN/CLOSING/CLOSED）
     ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach((k) => {
         try {
             window.WebSocket[k] = OriginalWebSocket[k];

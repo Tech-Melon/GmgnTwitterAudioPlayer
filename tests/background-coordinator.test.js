@@ -238,12 +238,52 @@ test('a busy processor is not replaced when its ping takes longer than 500ms', a
         payload: { item: { h: '0x21', s: 'buy', cnt: 'processed' } }
     };
     await harness.dispatch(event, firstSender);
-    const duplicate = await harness.dispatch(event, secondSender);
+    // 同事件由 Processor 再次上报：应走 pending 去重，而不是被第二 Tab 抢权
+    const duplicate = await harness.dispatch(event, firstSender);
 
     assert.equal(duplicate.duplicate, true);
     assert.equal(duplicate.pending, true);
     assert.equal(processDeliveries, 1);
     assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor.tabId, 21);
+});
+
+test('background ignores ingest from non-processor while a live processor exists', async () => {
+    const harness = createBackgroundHarness();
+    const processor = { tab: { id: 71 }, documentId: 'doc-71' };
+    const follower = { tab: { id: 72 }, documentId: 'doc-72' };
+    await harness.dispatch({ type: 'GMGN_REGISTER_MONITOR', visible: true }, processor);
+    await harness.dispatch({ type: 'GMGN_REGISTER_MONITOR', visible: true }, follower);
+
+    let processDeliveries = 0;
+    harness.setTabsSendHandler((_tabId, message, callback) => {
+        if (message.type === 'GMGN_PROCESSOR_PING' || message.type === 'GMGN_PROCESSOR_ROLE') {
+            callback({ ok: true });
+            return;
+        }
+        processDeliveries += 1;
+        callback({ ok: true, disposition: 'pending', runtimeState: {} });
+    });
+
+    const fromFollower = await harness.dispatch({
+        type: 'GMGN_INGEST_EVENT',
+        kind: 'wallet',
+        eventId: 'wallet_from_follower',
+        payload: { item: { h: '0x72', s: 'buy', cnt: 'processed' } }
+    }, follower);
+    const fromProcessor = await harness.dispatch({
+        type: 'GMGN_INGEST_EVENT',
+        kind: 'wallet',
+        eventId: 'wallet_from_processor',
+        payload: { item: { h: '0x71', s: 'buy', cnt: 'processed' } }
+    }, processor);
+
+    assert.equal(fromFollower.ok, true);
+    assert.equal(fromFollower.ignored, true);
+    assert.equal(fromFollower.not_processor, true);
+    assert.equal(fromProcessor.ok, true);
+    assert.equal(fromProcessor.not_processor, undefined);
+    assert.equal(processDeliveries, 1);
+    assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor.tabId, 71);
 });
 
 test('authorized playback failure retries the pending event on the same processor', async () => {

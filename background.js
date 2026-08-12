@@ -364,16 +364,56 @@ function sendToMonitor(record, message, timeoutMs = 1500) {
     });
 }
 
+/** 当前 Processor 是否仍有存活心跳（未超时） */
+function hasLiveProcessor(now = Date.now()) {
+    const processor = eventCoordinator.processor;
+    if (!processor || !Number.isInteger(processor.tabId)) return false;
+    const record = monitorTabs.get(processor.tabId);
+    if (!record) return false;
+    if (processor.documentId && record.documentId && processor.documentId !== record.documentId) {
+        return false;
+    }
+    return !isMonitorStale(record, now);
+}
+
+function isSameMonitor(record, processor) {
+    if (!record || !processor) return false;
+    return record.tabId === processor.tabId
+        && (!processor.documentId || processor.documentId === record.documentId);
+}
+
 async function routeMonitorEvent(msg, sender) {
     await coordinatorReady;
-    const registration = registerMonitor(sender, {
+    // 先登记存活，再判定是否允许上报。有存活 Processor 时，其它 Tab 直接静默丢弃，
+    // 避免 N 开标签把协调链打成 N 倍洪峰（历史诊断：99% 事件被 3 Tab 同时上报）。
+    const softRegistration = registerMonitor(sender, {
         visible: true,
         preferProcessor: false,
-        // 事件上报方默认是活跃 Processor；失联时允许它顺势接管
-        allowStaleTakeover: true
+        allowStaleTakeover: false
     });
+    if (!softRegistration || !softRegistration.record) return { ok: false, error: 'invalid_sender' };
+    const source = softRegistration.record;
+    const liveProcessor = hasLiveProcessor() ? eventCoordinator.processor : null;
+    if (liveProcessor && !isSameMonitor(source, liveProcessor)) {
+        return {
+            ok: true,
+            ignored: true,
+            not_processor: true,
+            isProcessor: false,
+            processorTabId: liveProcessor.tabId,
+            processorEpoch: liveProcessor.epoch
+        };
+    }
+
+    const registration = liveProcessor
+        ? softRegistration
+        : registerMonitor(sender, {
+            visible: true,
+            preferProcessor: false,
+            // 无存活 Processor：上报方顺势接管，避免全站静音
+            allowStaleTakeover: true
+        });
     if (!registration || !registration.record) return { ok: false, error: 'invalid_sender' };
-    const source = registration.record;
     if (registration.processorChanged) {
         await finalizeProcessorAssignment(true);
     }
