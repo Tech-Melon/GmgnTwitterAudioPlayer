@@ -133,6 +133,59 @@ function deactivateInvalidExtensionContext(error) {
     console.warn('🔄 [GMGN 盯盘伴侣] 插件上下文已失效，请刷新页面以恢复监控！');
 }
 
+// ════════════════════════════════════════════════════════════
+// 🔌 推送连接断开提示（inject 层健康监测 → GMGN_WS_STATUS）
+// ════════════════════════════════════════════════════════════
+let wssDownBannerEl = null;
+
+function showWssDownBanner() {
+    if (wssDownBannerEl && wssDownBannerEl.isConnected) return;
+    try {
+        const banner = document.createElement('div');
+        banner.id = 'gmgn-audio-wss-down-banner';
+        banner.textContent = 'GMGN 盯盘伴侣：行情推送连接已中断，点击刷新恢复播报';
+        banner.style.cssText = [
+            'position:fixed',
+            'top:12px',
+            'left:50%',
+            'transform:translateX(-50%)',
+            'z-index:2147483646',
+            'padding:10px 16px',
+            'border-radius:10px',
+            'background:rgba(206,120,20,0.94)',
+            'color:#fff',
+            'font:600 13px/1.4 system-ui,sans-serif',
+            'box-shadow:0 8px 24px rgba(0,0,0,0.28)',
+            'cursor:pointer',
+            'max-width:min(92vw,520px)',
+            'text-align:center'
+        ].join(';');
+        banner.title = '点击刷新页面';
+        banner.addEventListener('click', () => {
+            try { location.reload(); } catch (reloadError) { /* ignore */ }
+        });
+        (document.documentElement || document.body).appendChild(banner);
+        wssDownBannerEl = banner;
+    } catch (domError) {
+        // DOM 不可用时仅依赖 console 提示
+    }
+    console.warn('🔌 [GMGN 盯盘伴侣] GMGN 推送连接已断开且未自动恢复，请刷新页面');
+}
+
+function hideWssDownBanner() {
+    if (!wssDownBannerEl) return;
+    try {
+        wssDownBannerEl.remove();
+    } catch (removeError) { /* ignore */ }
+    wssDownBannerEl = null;
+}
+
+window.addEventListener('GMGN_WS_STATUS', (e) => {
+    const healthy = !e || !e.detail || e.detail.healthy !== false;
+    if (healthy) hideWssDownBanner();
+    else showWssDownBanner();
+});
+
 /** 连续 stale_processor 时主动弃权并重新争抢，避免静音到刷新 */
 function handleStaleProcessorSignal(reason) {
     staleProcessorStreak += 1;
@@ -3892,6 +3945,16 @@ window.addEventListener('GMGN_WALLET_MSG', handleWalletMsg);
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg) return false;
+    if (msg.type === 'GMGN_WSS_KEEPALIVE') {
+        // SW 每 ~10s 驱动：转发到 MAIN world 代发页面推送心跳（扩展消息不受后台节流）
+        window.dispatchEvent(new CustomEvent('GMGN_WS_KEEPALIVE'));
+        sendResponse({
+            ok: true,
+            visible: isPageVisibleNow(),
+            isProcessor: isLocalProcessor === true
+        });
+        return false;
+    }
     if (msg.type === 'GMGN_PROCESSOR_PING') {
         // PING 仅探活，绝不升权。误升权会导致多 Tab 同时全量上报，最终卡死/静音。
         sendResponse({

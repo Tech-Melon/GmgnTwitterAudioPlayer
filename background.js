@@ -32,8 +32,13 @@ let persistTimer = null;
 let persistDirty = false;
 let persistChain = Promise.resolve();
 const PERSIST_DEBOUNCE_MS = 150;
-/** Processor 超过该时间无心跳/注册则允许其它 Tab 接管 */
-const MONITOR_STALE_MS = 20000;
+/**
+ * Processor 超过该时间无心跳/注册则允许其它 Tab 接管。
+ * 后台标签页定时器被强节流后 content 心跳最慢 ~60s 一次，
+ * 阈值必须大于该间隔，否则后台 Processor 会被反复误判失联（角色震荡）。
+ * 正常情况下 offscreen 保活节拍（10s）会持续刷新存活时间。
+ */
+const MONITOR_STALE_MS = 75000;
 const DIAGNOSTIC_ORIGIN = 'http://127.0.0.1:37921/*';
 const DIAGNOSTIC_ENDPOINT = 'http://127.0.0.1:37921/log';
 const DIAGNOSTIC_SESSION_ID = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -701,8 +706,10 @@ async function ensureOffscreenDocument() {
             }
             await chrome.offscreen.createDocument({
                 url: OFFSCREEN_URL,
-                reasons: ['AUDIO_PLAYBACK'],
-                justification: 'GMGN 标签页在后台时仍需播报推特/钱包提示音与 TTS'
+                // BLOBS：处理 Blob/DataURL 音频数据；同时避免 AUDIO_PLAYBACK
+                // 单一理由下 30s 无声即被回收，保活节拍器需要文档常驻
+                reasons: ['AUDIO_PLAYBACK', 'BLOBS'],
+                justification: 'GMGN 标签页在后台时仍需播报推特/钱包提示音与 TTS，并处理 Blob 音频数据、维持推送保活节拍'
             });
             console.log('[GMGN 盯盘伴侣] Offscreen 播报文档已创建');
         } catch (e) {
@@ -743,8 +750,72 @@ async function relayToOffscreen(payload) {
     });
 }
 
+// ════════════════════════════════════════════════════════════
+// 🫀 WSS 保活引擎
+// 后台标签页定时器被 Chrome 强节流（隐藏 >5min 后 1 次/分钟），
+// GMGN 页面自身的 10s 推送心跳失效 → 服务端断线 → 推特/钱包推送
+// 时断时续直至全停（刷新才恢复）。offscreen 文档不受该节流影响，
+// 由它每 10s 发 GMGN_KEEPALIVE_TICK，SW 转发到各 GMGN 标签页代发心跳。
+// ════════════════════════════════════════════════════════════
+let lastKeepaliveEnsureAt = 0;
+
+/** 确保 offscreen 保活节拍器存在（节流为 25s 一次检查，调用方可高频触发） */
+function ensureKeepaliveEngine() {
+    const now = Date.now();
+    if (now - lastKeepaliveEnsureAt < 25000) return;
+    lastKeepaliveEnsureAt = now;
+    ensureOffscreenDocument().catch(() => {});
+}
+
+function sendWssKeepaliveToTab(tabId) {
+    try {
+        chrome.tabs.sendMessage(tabId, { type: 'GMGN_WSS_KEEPALIVE' }, (response) => {
+            if (chrome.runtime.lastError || !response || response.ok !== true) return;
+            // 保活应答顺带刷新监控存活时间，弥补后台心跳被节流到 60s 的空窗
+            const record = monitorTabs.get(tabId);
+            if (record) {
+                record.lastSeenAt = Date.now();
+                record.visible = response.visible === true;
+            } else {
+                monitorTabs.set(tabId, {
+                    tabId,
+                    documentId: null,
+                    lastSeenAt: Date.now(),
+                    visible: response.visible === true
+                });
+            }
+        });
+    } catch (error) {
+        // Tab 已关闭等场景直接忽略，onRemoved 会做故障转移
+    }
+}
+
+function handleKeepaliveTick() {
+    if (monitorTabs.size > 0) {
+        for (const tabId of monitorTabs.keys()) sendWssKeepaliveToTab(tabId);
+        return;
+    }
+    // SW 冷启动后监控表为空：按 URL 找回 GMGN 标签页
+    try {
+        chrome.tabs.query({ url: ['*://*.gmgn.ai/*', '*://gmgn.ai/*'] }, (tabs) => {
+            if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
+            tabs.forEach((tab) => {
+                if (tab && Number.isInteger(tab.id)) sendWssKeepaliveToTab(tab.id);
+            });
+        });
+    } catch (error) {
+        // tabs API 异常时等待下一拍
+    }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || typeof msg.type !== 'string') return false;
+
+    if (msg.type === 'GMGN_KEEPALIVE_TICK') {
+        handleKeepaliveTick();
+        sendResponse({ ok: true });
+        return false;
+    }
 
     if (msg.type === 'GMGN_DIAGNOSTIC_LOG') {
         if (!debugLoggingEnabled) {
@@ -757,6 +828,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === 'GMGN_REGISTER_MONITOR' || msg.type === 'GMGN_MONITOR_HEARTBEAT') {
+        ensureKeepaliveEngine();
         coordinatorReady.then(async () => {
             const visible = msg.visible === true
                 || (msg.visible !== false && msg.type === 'GMGN_REGISTER_MONITOR');
@@ -789,6 +861,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === 'GMGN_INGEST_EVENT') {
+        ensureKeepaliveEngine();
         if (!isActionableMonitorEvent(msg.kind, msg.payload)) {
             sendResponse({ ok: true, ignored: true });
             return false;
@@ -982,5 +1055,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
         removeMonitorAndFailover(tabId);
     }
 });
+
+// SW 每次唤醒都确保保活节拍器在位（offscreen 常驻，10s 一拍反向保持 SW 活跃）
+ensureKeepaliveEngine();
 
 console.log('[GMGN 盯盘伴侣] Service Worker 已加载', chrome.runtime.getManifest().version);

@@ -22,6 +22,74 @@
         'following_wallet_activity'
     ]);
 
+    // ════════════════════════════════════════════════════════
+    // 🫀 WSS 保活与健康监测
+    // 后台标签页定时器被 Chrome 强节流（1 次/分钟），GMGN 页面自身的
+    // 10s 推送心跳会失效导致服务端断线（推特/钱包推送时断时续直至全停）。
+    // 扩展消息不受节流：SW 每 ~10s 触发 GMGN_WS_KEEPALIVE，由此代发心跳帧。
+    // ════════════════════════════════════════════════════════
+    const monitoredSockets = new Set();
+    const WS_DISCONNECT_ALERT_MS = 60000;  // 无存活推送连接超过 1 分钟判定异常
+    const WS_SILENT_ALERT_MS = 90000;      // 连接看似存活但 90s 无任何帧判定僵死
+    const wsHealth = {
+        everEligible: false,
+        lastEligibleOpenAt: 0,
+        lastFrameAt: 0,
+        unhealthy: false
+    };
+
+    /** 标记该 socket 为「用户推送连接」（订阅/心跳协议帧或监控频道消息出现过） */
+    function markSocketKeepaliveEligible(ws) {
+        if (ws.__gmgnKeepaliveEligible) return;
+        ws.__gmgnKeepaliveEligible = true;
+        const now = Date.now();
+        wsHealth.everEligible = true;
+        if (!wsHealth.lastEligibleOpenAt) wsHealth.lastEligibleOpenAt = now;
+        if (!wsHealth.lastFrameAt) wsHealth.lastFrameAt = now;
+    }
+
+    function buildKeepaliveFrame() {
+        return JSON.stringify({
+            action: 'heartbeat',
+            channel: 'ping',
+            data: { client_ts: Date.now() }
+        });
+    }
+
+    window.addEventListener('GMGN_WS_KEEPALIVE', function () {
+        if (window.__GMGN_AUDIO_INJECT_GENERATION !== injectionGeneration) return;
+        const now = Date.now();
+        let openEligible = 0;
+        monitoredSockets.forEach(function (ws) {
+            if (ws.readyState === 1 && ws.__gmgnKeepaliveEligible) {
+                openEligible += 1;
+                try {
+                    if (ws.__gmgnOriginalSend) ws.__gmgnOriginalSend(buildKeepaliveFrame());
+                } catch (e) {
+                    // 心跳失败不影响页面自身逻辑
+                }
+            } else if (ws.readyState === 3) {
+                monitoredSockets.delete(ws);
+            }
+        });
+        if (openEligible > 0) wsHealth.lastEligibleOpenAt = now;
+
+        const disconnectedTooLong = openEligible === 0
+            && wsHealth.lastEligibleOpenAt > 0
+            && (now - wsHealth.lastEligibleOpenAt) > WS_DISCONNECT_ALERT_MS;
+        const silentTooLong = openEligible > 0
+            && wsHealth.lastFrameAt > 0
+            && (now - wsHealth.lastFrameAt) > WS_SILENT_ALERT_MS;
+        const unhealthy = wsHealth.everEligible && (disconnectedTooLong || silentTooLong);
+        if (unhealthy !== wsHealth.unhealthy) {
+            wsHealth.unhealthy = unhealthy;
+            window.dispatchEvent(new CustomEvent('GMGN_WS_STATUS', {
+                detail: { healthy: !unhealthy }
+            }));
+            debugLog(`🩺 [GMGN 盯盘伴侣 - Inject] 推送连接状态: ${unhealthy ? '异常' : '恢复'}`);
+        }
+    });
+
     // 钱包播报必需字段：丢弃头像/URL/无关数值，降低 CustomEvent 克隆成本
     const WALLET_KEEP_KEYS = [
         's', 'n', 'cnt', 'm', 'h', 'bs', 'ba', 'a',
@@ -231,11 +299,20 @@
         if (!monitorThisSocket) return ws;
 
         const originalSend = ws.send.bind(ws);
+        ws.__gmgnOriginalSend = originalSend;
+        monitoredSockets.add(ws);
+        ws.addEventListener('close', function () {
+            monitoredSockets.delete(ws);
+        });
         ws.send = function (data) {
             const channel = extractSubscribeChannel(data);
             if (channel && window.__GMGN_WS_BLOCKLIST && window.__GMGN_WS_BLOCKLIST.has(channel)) {
                 debugLog(`🚫 [GMGN 盯盘伴侣 - Inject] 已拦截 WSS 订阅: ${channel}`);
                 return;
+            }
+            // 页面发出 subscribe/heartbeat 协议帧 → 该 socket 是用户推送连接
+            if (!ws.__gmgnKeepaliveEligible && typeof data === 'string' && data.indexOf('"action":') !== -1) {
+                markSocketKeepaliveEligible(ws);
             }
             return originalSend(data);
         };
@@ -243,6 +320,17 @@
         ws.addEventListener('message', function (event) {
             if (window.__GMGN_AUDIO_INJECT_GENERATION !== injectionGeneration) return;
             const wssReceivedAt = Date.now();
+            // 健康记录须先于任何开关过滤：即便播报被关闭也要维持保活监测
+            if (typeof event.data === 'string') {
+                if (!ws.__gmgnKeepaliveEligible && (
+                    event.data.indexOf('"channel":"pong"') !== -1
+                    || event.data.indexOf('twitter_user_monitor_basic') !== -1
+                    || event.data.indexOf('following_wallet_activity') !== -1
+                )) {
+                    markSocketKeepaliveEligible(ws);
+                }
+                if (ws.__gmgnKeepaliveEligible) wsHealth.lastFrameAt = wssReceivedAt;
+            }
             if (!window.__GMGN_AUDIO_ENABLED) return;
 
             // 非 Processor Tab：MAIN 世界直接丢弃，避免 N 倍 CustomEvent + content 处理

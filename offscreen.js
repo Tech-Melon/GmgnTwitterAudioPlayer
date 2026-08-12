@@ -172,6 +172,7 @@ function playItemsNow(channel, items, volume, options = {}) {
     const settle = (result) => {
       if (settled) return;
       settled = true;
+      clearTimeout(watchdogTimer);
       if (channel === 'exclusive' && exclusiveCancel) exclusiveCancel = null;
       if (channel === 'tts' && ttsCancel) ttsCancel = null;
       resolve(result);
@@ -182,6 +183,18 @@ function playItemsNow(channel, items, volume, options = {}) {
     };
     if (channel === 'exclusive') exclusiveCancel = cancelThis;
     else ttsCancel = cancelThis;
+
+    // 🛡️ 看门狗：媒体元素卡死（onended/onerror 均不触发）时强制结算，
+    // 防止单个异常任务永久堵死整条通道队列
+    const PLAYBACK_WATCHDOG_MS = 45000;
+    const watchdogTimer = setTimeout(() => {
+      if (settled) return;
+      console.warn(`[GMGN Offscreen] 播放看门狗超时，强制结束当前任务 | channel=${channel}`);
+      if (channel === 'exclusive') exclusiveGen += 1;
+      else ttsGen += 1;
+      stopPlayer(player);
+      settle({ ok: false, error: 'watchdog_timeout' });
+    }, PLAYBACK_WATCHDOG_MS);
 
     let idx = 0;
 
@@ -435,5 +448,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 });
+
+// ⏱️ 保活节拍器：offscreen 文档不受后台标签页定时器强节流影响。
+// 每 10s 通知 SW 向各 GMGN 标签页转发 WSS 心跳，防止后台页推送断线；
+// 节拍消息同时反向保持 SW 活跃（每拍重置其空闲回收计时）。
+const KEEPALIVE_TICK_MS = 10000;
+setInterval(() => {
+  try {
+    chrome.runtime.sendMessage({ type: 'GMGN_KEEPALIVE_TICK' }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {
+    // SW 重启瞬间可能失败，下一拍自动重试
+  }
+}, KEEPALIVE_TICK_MS);
 
 if (debugLoggingEnabled) console.log('[GMGN Offscreen] 后台播报文档已就绪');
