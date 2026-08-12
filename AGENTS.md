@@ -45,12 +45,16 @@ node -c background.js
 - **minor**（x.Y.0）：新增功能特性、UI 改版
 - **major**（X.0.0）：架构级别的不兼容改动
 
-### Step 2.5: 更新 README.md
+### Step 2.5: 更新 README.md 与 update-notes.js
 在 `README.md` 中同步更新两处：
 1. **`📋 更新日志`** 段落：添加新版本条目（日期 + 版本号 + 一句话描述）
 2. **`📝 详细商店发布文案 (Store Changelog)`** 段落：在最顶部追加新版本的详细文案（打包脚本 `pack.py` 会自动提取此段落打印）
 
 > ⚠️ 商店文案必须写在已有版本之前（最新在最上方），格式参照已有的 `**vX.Y.Z**` 段落。
+
+同时**必须**更新 `update-notes.js`（安装/升级弹窗与 `update.html` 的**唯一**用户可见说明数据源）：
+- 以 `manifest.version` 为 key（如 `'1.15.3'`）追加字符串数组
+- 若缺少当前版本 key，页面会回退显示**旧版**说明（看起来像“版本号对、内容错”）
 
 ### Step 3: Git 提交与推送
 使用 `tmp/_run_xxx.py` 临时脚本封装 git 命令（遵守根目录纯洁性原则）：
