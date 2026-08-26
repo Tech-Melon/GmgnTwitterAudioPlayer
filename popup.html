@@ -1045,6 +1045,14 @@
                     </div>
                 </div>
             </div>
+            <div style="margin-bottom: 12px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 12px; color: var(--text-sec); white-space: nowrap;">条间停顿</span>
+                    <input type="range" id="walletAnnounceGap" min="0" max="1000" step="50" value="250" style="flex: 1; height: 4px; accent-color: var(--primary-color);">
+                    <span id="walletAnnounceGapLabel" style="font-size: 11px; color: var(--text-sec); min-width: 44px; text-align: right;">250ms</span>
+                </div>
+                <div style="font-size: 10px; color: var(--text-sec); line-height: 1.4; margin-top: 4px;">只加在两条完整播报之间，例如「A买入代币1」说完再停，不会拆开「人名」和「买入」。</div>
+            </div>
             <!-- 金额范围筛选 -->
             <div style="margin-bottom: 10px;">
                 <span style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 4px;">金额</span>

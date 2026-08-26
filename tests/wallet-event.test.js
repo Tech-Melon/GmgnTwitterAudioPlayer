@@ -6,6 +6,8 @@ const {
     DEFAULT_WALLET_CHAINS,
     normalizeChain,
     normalizeEnabledChains,
+    normalizeAnnounceGapMs,
+    DEFAULT_ANNOUNCE_GAP_MS,
     isChainEnabled,
     isValidCustomChainId,
     normalizeCustomChains,
@@ -34,6 +36,16 @@ test('supported wallet chains match the current GMGN chain menu', () => {
         'arc', 'xlayer', 'hyperevm', 'megaeth', 'monad', 'tron'
     ]);
     assert.deepEqual(DEFAULT_WALLET_CHAINS, ['sol', 'eth', 'bsc', 'robinhood', 'base']);
+});
+
+test('wallet announce gap defaults to 250ms and stays within 0-1000', () => {
+    assert.equal(DEFAULT_ANNOUNCE_GAP_MS, 250);
+    assert.equal(normalizeAnnounceGapMs(undefined), 250);
+    assert.equal(normalizeAnnounceGapMs(''), 250);
+    assert.equal(normalizeAnnounceGapMs(0), 0);
+    assert.equal(normalizeAnnounceGapMs(250), 250);
+    assert.equal(normalizeAnnounceGapMs(-20), 0);
+    assert.equal(normalizeAnnounceGapMs(5000), 1000);
 });
 
 test('wallet chain filters normalize aliases and default conservatively', () => {

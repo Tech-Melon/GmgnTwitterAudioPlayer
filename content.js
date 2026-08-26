@@ -40,6 +40,7 @@ const formatCompactWalletSpeechGroups = GmgnWalletEvent.formatCompactSpeechGroup
 const splitFreshWalletItems = GmgnWalletEvent.splitFreshItems;
 const playWalletSegmentGroups = GmgnWalletEvent.playProgressiveSegmentGroups;
 const mergePendingWalletSellConfirm = GmgnWalletEvent.mergePendingSellConfirm;
+const normalizeWalletAnnounceGapMs = GmgnWalletEvent.normalizeAnnounceGapMs;
 const stitchTtsBlobs = (typeof GmgnTtsSeam !== 'undefined' && GmgnTtsSeam.stitchBlobs)
     ? GmgnTtsSeam.stitchBlobs.bind(GmgnTtsSeam)
     : async (blobs) => (Array.isArray(blobs) && blobs.length === 1 ? blobs[0] : null);
@@ -1824,10 +1825,17 @@ const WalletBatch = {
     }
 };
 
+function getWalletAnnounceGapMs() {
+    const wf = configCache.walletFilters || {};
+    return normalizeWalletAnnounceGapMs(wf.announceGapMs);
+}
+
 const DynamicPlaybackScheduler = {
     _isPlaying: false,
     _safetyTimer: null,
     _activeKind: null,
+    _gapTimer: null,
+    _gapFromKind: null,
 
     /** 🛡️ 启动超时兜底计时器：防止 onComplete 因异常路径未被调用导致调度器永久卡死 */
     _startSafetyTimer() {
@@ -1918,7 +1926,13 @@ const DynamicPlaybackScheduler = {
 
     /** TTS 通道播完，解锁并调度下一批（专属铃不经过此锁） */
     releaseAndNext() {
-        const completedKind = this._activeKind;
+        const fromGap = this._activeKind === 'gap';
+        const completedKind = fromGap ? this._gapFromKind : this._activeKind;
+        if (this._gapTimer) {
+            clearTimeout(this._gapTimer);
+            this._gapTimer = null;
+        }
+        this._gapFromKind = null;
         this._isPlaying = false;
         this._activeKind = null;
         if (this._safetyTimer) {
@@ -1928,6 +1942,19 @@ const DynamicPlaybackScheduler = {
 
         const hasTwitter = TwitterBatch.hasContent();
         const hasWallet = WalletBatch.hasContent();
+        const hasNextWallet = hasWallet;
+        const gapMs = getWalletAnnounceGapMs();
+        if (!fromGap && completedKind === 'wallet' && hasNextWallet && gapMs > 0) {
+            this._isPlaying = true;
+            this._activeKind = 'gap';
+            this._gapFromKind = 'wallet';
+            this._gapTimer = setTimeout(() => {
+                this._gapTimer = null;
+                this.releaseAndNext();
+            }, gapMs);
+            return;
+        }
+
         const playWalletNext = hasWallet && (!hasTwitter || completedKind === 'twitter');
 
         if (playWalletNext) {
@@ -2880,7 +2907,7 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
 
     async function toSeamlessBlobs(blobs) {
         const valid = (Array.isArray(blobs) ? blobs : [blobs]).filter(Boolean);
-        if (valid.length <= 1) return valid;
+        if (valid.length === 0) return [];
         try {
             const stitched = await stitchTtsBlobs(valid);
             if (stitched) return [stitched];

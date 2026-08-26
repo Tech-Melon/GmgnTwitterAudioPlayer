@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const DEFAULT_WALLET_CHAINS = GmgnWalletEvent.DEFAULT_WALLET_CHAINS;
     const normalizeWalletChain = GmgnWalletEvent.normalizeChain;
     const normalizeEnabledWalletChains = GmgnWalletEvent.normalizeEnabledChains;
+    const normalizeAnnounceGapMs = GmgnWalletEvent.normalizeAnnounceGapMs;
     const normalizeCustomWalletChains = GmgnWalletEvent.normalizeCustomChains;
     const getWalletChainCatalog = GmgnWalletEvent.getChainCatalog;
     const resolveWalletChainSpeakAs = GmgnWalletEvent.resolveChainSpeakAs;
@@ -249,6 +250,8 @@ document.addEventListener('DOMContentLoaded', () => {
         customChainSpeakInput: document.getElementById('customChainSpeakInput'),
         cancelAddWalletChainBtn: document.getElementById('cancelAddWalletChainBtn'),
         saveAddWalletChainBtn: document.getElementById('saveAddWalletChainBtn'),
+        walletAnnounceGap: document.getElementById('walletAnnounceGap'),
+        walletAnnounceGapLabel: document.getElementById('walletAnnounceGapLabel'),
         testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
         testWalletSellReduceBtn: document.getElementById('testWalletSellReduceBtn'),
         testWalletSellClearBtn: document.getElementById('testWalletSellClearBtn'),
@@ -725,6 +728,9 @@ document.addEventListener('DOMContentLoaded', () => {
             els.filterBuy.checked = walletFilters.buy !== false;
             els.filterSellReduce.checked = walletFilters.sellReduce !== false;
             els.filterSellClear.checked = walletFilters.sellClear !== false;
+            const announceGapMs = normalizeAnnounceGapMs(walletFilters.announceGapMs);
+            if (els.walletAnnounceGap) els.walletAnnounceGap.value = String(announceGapMs);
+            if (els.walletAnnounceGapLabel) els.walletAnnounceGapLabel.textContent = `${announceGapMs}ms`;
             // 🧊 回显冷却器配置
             els.buyCooldownEnabled.checked = !!walletFilters.buyCooldownEnabled;
             els.buyCooldownTime.value = walletFilters.buyCooldownTime || 15;
@@ -1670,6 +1676,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 chainSpeakEnabled: isChainSpeakMasterEnabled(),
                 chainSpeakOn: collectChainSpeakOnMap(),
                 chainSpeakAs: collectChainSpeakAsMap(),
+                announceGapMs: normalizeAnnounceGapMs(els.walletAnnounceGap && els.walletAnnounceGap.value),
                 minAmount: parseFloat(els.walletMinAmount.value) || 0,
                 maxAmount: parseFloat(els.walletMaxAmount.value) || 0,
                 minMcap: parseFloat(els.walletMinMcap.value) || 0,
@@ -1748,6 +1755,18 @@ document.addEventListener('DOMContentLoaded', () => {
         els.sellClearCooldownPanel.style.pointerEvents = els.filterSellClear.checked ? 'auto' : 'none';
         saveWalletFilters();
     });
+    if (els.walletAnnounceGap) {
+        els.walletAnnounceGap.addEventListener('input', () => {
+            const gapMs = normalizeAnnounceGapMs(els.walletAnnounceGap.value);
+            if (els.walletAnnounceGapLabel) els.walletAnnounceGapLabel.textContent = `${gapMs}ms`;
+        });
+        els.walletAnnounceGap.addEventListener('change', () => {
+            const gapMs = normalizeAnnounceGapMs(els.walletAnnounceGap.value);
+            els.walletAnnounceGap.value = String(gapMs);
+            if (els.walletAnnounceGapLabel) els.walletAnnounceGapLabel.textContent = `${gapMs}ms`;
+            saveWalletFilters(gapMs === 0 ? '条间停顿已关闭' : `条间停顿 ${gapMs}ms`);
+        });
+    }
     els.walletMinAmount.addEventListener('change', saveWalletFilters);
     els.walletMaxAmount.addEventListener('change', saveWalletFilters);
     els.walletMinMcap.addEventListener('change', saveWalletFilters);
