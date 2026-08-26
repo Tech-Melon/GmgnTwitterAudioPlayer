@@ -142,11 +142,61 @@ function resolvePlayUrl(item) {
   return null;
 }
 
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('blob_to_dataurl_failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function stitchPlaybackItems(list) {
+  if (!list || list.length < 2) return list;
+  if (typeof GmgnTtsSeam === 'undefined' || typeof GmgnTtsSeam.stitchBlobs !== 'function') return list;
+  if (list.some((item) => item && typeof item === 'object' && item.kind === 'beep')) return list;
+  const blobs = [];
+  for (const item of list) {
+    const url = resolvePlayUrl(item);
+    if (!url) return list;
+    const response = await fetch(url);
+    if (!response.ok) return list;
+    blobs.push(await response.blob());
+  }
+  const ctx = await resumeAudioContext();
+  const stitched = await GmgnTtsSeam.stitchBlobs(blobs, { audioContext: ctx });
+  if (!stitched) return list;
+  const dataUrl = await blobToDataUrl(stitched);
+  return [{ kind: 'data', dataUrl }];
+}
+
 /**
  * 顺序播放一段或多段
  * @returns {Promise<{ok:boolean, error?:string, interrupted?:boolean}>}
  */
 function playItemsNow(channel, items, volume, options = {}) {
+  const list = (Array.isArray(items) ? items : [items]).filter(Boolean);
+  if (list.length === 0) return Promise.resolve({ ok: false, error: 'empty' });
+  const canStitch = list.length > 1
+    && typeof GmgnTtsSeam !== 'undefined'
+    && typeof GmgnTtsSeam.stitchBlobs === 'function'
+    && list.every((item) => !(item && typeof item === 'object' && item.kind === 'beep'));
+  if (!canStitch) return playResolvedItemsNow(channel, list, volume, options);
+  const stitchTimeoutMs = (typeof GmgnTtsSeam !== 'undefined' && GmgnTtsSeam.STITCH_TIMEOUT_MS) || 1500;
+  let stitchTimer = null;
+  const stitchWork = stitchPlaybackItems(list).catch(() => list);
+  const stitchDeadline = new Promise((_, reject) => {
+    stitchTimer = setTimeout(() => reject(new Error('stitch_timeout')), stitchTimeoutMs);
+  });
+  return Promise.race([stitchWork, stitchDeadline])
+    .catch(() => list)
+    .then((stitched) => playResolvedItemsNow(channel, stitched, volume, options))
+    .finally(() => {
+      if (stitchTimer) clearTimeout(stitchTimer);
+    });
+}
+
+function playResolvedItemsNow(channel, items, volume, options = {}) {
   const list = (Array.isArray(items) ? items : [items]).filter(Boolean);
   if (list.length === 0) return Promise.resolve({ ok: false, error: 'empty' });
 

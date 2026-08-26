@@ -85,6 +85,8 @@ function createHarness() {
         console: { log() {}, warn() {} },
         setTimeout,
         clearTimeout,
+        setInterval: () => 0,
+        clearInterval: () => {},
         chrome: {
             runtime: {
                 getURL: (value) => `chrome-extension://test/${value}`,
@@ -248,6 +250,10 @@ test('offscreen limits a busy channel to one hundred queued jobs', async () => {
     await delay(35);
     assert.equal((await active).ok, true);
     assert.equal(ttsPlayer.src, 'data:job-3');
+    for (let index = 3; index <= 102; index += 1) {
+        ttsPlayer.onended();
+        await delay(0);
+    }
 });
 
 test('offscreen applies zero and 150 percent volume through GainNode', async () => {

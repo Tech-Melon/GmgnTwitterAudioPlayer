@@ -6,10 +6,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // 语速三档：较快 / 极快 / 闪电（Edge-TTS prosody rate）
     const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
     const TTS_RATE_DEFAULT = '+75%'; // 闪电
-    const SUPPORTED_WALLET_CHAINS = GmgnWalletEvent.SUPPORTED_WALLET_CHAINS;
     const DEFAULT_WALLET_CHAINS = GmgnWalletEvent.DEFAULT_WALLET_CHAINS;
     const normalizeWalletChain = GmgnWalletEvent.normalizeChain;
     const normalizeEnabledWalletChains = GmgnWalletEvent.normalizeEnabledChains;
+    const normalizeCustomWalletChains = GmgnWalletEvent.normalizeCustomChains;
+    const getWalletChainCatalog = GmgnWalletEvent.getChainCatalog;
+    const resolveWalletChainSpeakAs = GmgnWalletEvent.resolveChainSpeakAs;
+    const getDefaultWalletChainSpeakAs = GmgnWalletEvent.getDefaultChainSpeakAs;
+    const normalizeChainSpeakOnMap = GmgnWalletEvent.normalizeChainSpeakOnMap;
+    const isValidCustomChainId = GmgnWalletEvent.isValidCustomChainId;
+    const normalizeCustomChain = GmgnWalletEvent.normalizeCustomChain;
 
     /** 将任意旧档位映射到三档之一 */
     const normalizeRate = (rate) => {
@@ -231,8 +237,18 @@ document.addEventListener('DOMContentLoaded', () => {
         filterSellClear: document.getElementById('filterSellClear'),
         walletChainList: document.getElementById('walletChainList'),
         walletChainCount: document.getElementById('walletChainCount'),
+        walletChainSpeakList: document.getElementById('walletChainSpeakList'),
+        chainSpeakEnabled: document.getElementById('chainSpeakEnabled'),
+        addWalletChainBtn: document.getElementById('addWalletChainBtn'),
         selectAllWalletChainsBtn: document.getElementById('selectAllWalletChainsBtn'),
         resetWalletChainsBtn: document.getElementById('resetWalletChainsBtn'),
+        addWalletChainModal: document.getElementById('addWalletChainModal'),
+        customChainIdInput: document.getElementById('customChainIdInput'),
+        customChainLabelInput: document.getElementById('customChainLabelInput'),
+        customChainMarkInput: document.getElementById('customChainMarkInput'),
+        customChainSpeakInput: document.getElementById('customChainSpeakInput'),
+        cancelAddWalletChainBtn: document.getElementById('cancelAddWalletChainBtn'),
+        saveAddWalletChainBtn: document.getElementById('saveAddWalletChainBtn'),
         testWalletBuyBtn: document.getElementById('testWalletBuyBtn'),
         testWalletSellReduceBtn: document.getElementById('testWalletSellReduceBtn'),
         testWalletSellClearBtn: document.getElementById('testWalletSellClearBtn'),
@@ -288,8 +304,16 @@ document.addEventListener('DOMContentLoaded', () => {
         addCustomWalletBtn: document.getElementById('addCustomWalletBtn')
     };
 
+    let customWalletChains = [];
+    let chainSpeakAsMap = {};
+    let chainSpeakOnMap = {};
+
     function getWalletChainInputs() {
         return els.walletChainList ? Array.from(els.walletChainList.querySelectorAll('input[data-wallet-chain]')) : [];
+    }
+
+    function getWalletChainCatalogItems() {
+        return getWalletChainCatalog(customWalletChains);
     }
 
     function updateWalletChainCount() {
@@ -298,37 +322,165 @@ document.addEventListener('DOMContentLoaded', () => {
         if (els.walletChainCount) els.walletChainCount.textContent = `已选 ${selected}/${inputs.length}`;
     }
 
-    function renderWalletChainSelector() {
-        if (!els.walletChainList) return;
-        els.walletChainList.innerHTML = SUPPORTED_WALLET_CHAINS.map((chain) => `
-            <label class="wallet-chain-option" title="${escapeHTML(chain.label)}">
-                <input type="checkbox" data-wallet-chain="${escapeHTML(chain.id)}" aria-label="${escapeHTML(chain.label)}">
-                <span class="wallet-chain-logo" style="background:${chain.color};color:${chain.textColor};">${escapeHTML(chain.mark)}</span>
-                <span class="wallet-chain-name">${escapeHTML(chain.label)}</span>
-            </label>
-        `).join('');
-        getWalletChainInputs().forEach((input) => input.addEventListener('change', () => {
-            updateWalletChainCount();
-            saveWalletFilters();
-        }));
-        updateWalletChainCount();
-    }
-
-    function setWalletChainSelection(chains) {
-        const selected = new Set(normalizeEnabledWalletChains(chains));
-        getWalletChainInputs().forEach((input) => {
-            input.checked = selected.has(input.dataset.walletChain);
-        });
-        updateWalletChainCount();
-    }
-
     function getSelectedWalletChains() {
         return getWalletChainInputs()
             .filter((input) => input.checked)
             .map((input) => normalizeWalletChain(input.dataset.walletChain));
     }
 
-    renderWalletChainSelector();
+    function isChainSpeakMasterEnabled() {
+        return !!(els.chainSpeakEnabled && els.chainSpeakEnabled.checked);
+    }
+
+    function collectChainSpeakAsMap() {
+        const next = { ...chainSpeakAsMap };
+        if (!els.walletChainSpeakList) return next;
+        els.walletChainSpeakList.querySelectorAll('input[data-chain-speak]').forEach((input) => {
+            const id = normalizeWalletChain(input.dataset.chainSpeak);
+            if (!id) return;
+            next[id] = String(input.value || '').trim();
+        });
+        return next;
+    }
+
+    function collectChainSpeakOnMap() {
+        const next = { ...chainSpeakOnMap };
+        if (!els.walletChainSpeakList) return next;
+        els.walletChainSpeakList.querySelectorAll('input[data-chain-speak-on]').forEach((input) => {
+            const id = normalizeWalletChain(input.dataset.chainSpeakOn);
+            if (!id) return;
+            next[id] = input.checked === true;
+        });
+        return next;
+    }
+
+    function syncChainSpeakPanelState() {
+        if (!els.walletChainSpeakList) return;
+        els.walletChainSpeakList.classList.toggle('is-disabled', !isChainSpeakMasterEnabled());
+    }
+
+    function renderWalletChainSpeakList() {
+        if (!els.walletChainSpeakList) return;
+        const selected = new Set(getSelectedWalletChains());
+        const items = getWalletChainCatalogItems().filter((chain) => selected.has(chain.id));
+        if (items.length === 0) {
+            els.walletChainSpeakList.innerHTML = '<div class="wallet-chain-speak-hint" style="grid-column:1/-1;margin:0;">先勾选要监控的链，再决定要不要念链名</div>';
+            syncChainSpeakPanelState();
+            return;
+        }
+        els.walletChainSpeakList.innerHTML = items.map((chain) => {
+            const speakAs = Object.prototype.hasOwnProperty.call(chainSpeakAsMap, chain.id)
+                ? chainSpeakAsMap[chain.id]
+                : getDefaultWalletChainSpeakAs(chain.id, customWalletChains);
+            const speakOn = chainSpeakOnMap[chain.id] === true;
+            return `
+            <label class="wallet-chain-speak-item" title="${escapeHTML(chain.label)}">
+                <input type="checkbox" data-chain-speak-on="${escapeHTML(chain.id)}" aria-label="开启 ${escapeHTML(chain.label)} 链名播报"${speakOn ? ' checked' : ''}>
+                <span class="wallet-chain-speak-label">${escapeHTML(chain.label)}</span>
+                <input type="text" data-chain-speak="${escapeHTML(chain.id)}" maxlength="16" value="${escapeHTML(speakAs)}" placeholder="${escapeHTML(getDefaultWalletChainSpeakAs(chain.id, customWalletChains))}" aria-label="${escapeHTML(chain.label)} 播报词">
+            </label>`;
+        }).join('');
+        els.walletChainSpeakList.querySelectorAll('input[data-chain-speak], input[data-chain-speak-on]').forEach((input) => {
+            input.addEventListener('change', () => {
+                chainSpeakAsMap = collectChainSpeakAsMap();
+                chainSpeakOnMap = collectChainSpeakOnMap();
+                saveWalletFilters();
+            });
+        });
+        syncChainSpeakPanelState();
+    }
+
+    function renderWalletChainSelector(selectedChains) {
+        if (!els.walletChainList) return;
+        const selected = new Set(normalizeEnabledWalletChains(
+            selectedChains || getSelectedWalletChains(),
+            customWalletChains
+        ));
+        els.walletChainList.innerHTML = getWalletChainCatalogItems().map((chain) => `
+            <label class="wallet-chain-option" title="${escapeHTML(chain.label)}">
+                <input type="checkbox" data-wallet-chain="${escapeHTML(chain.id)}" aria-label="${escapeHTML(chain.label)}"${selected.has(chain.id) ? ' checked' : ''}>
+                <span class="wallet-chain-logo" style="background:${chain.color};color:${chain.textColor};">${escapeHTML(chain.mark)}</span>
+                <span class="wallet-chain-name">${escapeHTML(chain.label)}</span>
+                ${chain.custom ? `<button type="button" class="wallet-chain-remove" data-remove-chain="${escapeHTML(chain.id)}" title="删除自定义链" aria-label="删除 ${escapeHTML(chain.label)}">×</button>` : ''}
+            </label>
+        `).join('');
+        getWalletChainInputs().forEach((input) => input.addEventListener('change', () => {
+            chainSpeakAsMap = collectChainSpeakAsMap();
+            chainSpeakOnMap = collectChainSpeakOnMap();
+            updateWalletChainCount();
+            renderWalletChainSpeakList();
+            saveWalletFilters();
+        }));
+        els.walletChainList.querySelectorAll('[data-remove-chain]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeCustomWalletChain(button.getAttribute('data-remove-chain'));
+            });
+        });
+        updateWalletChainCount();
+        renderWalletChainSpeakList();
+    }
+
+    function setWalletChainSelection(chains) {
+        renderWalletChainSelector(chains);
+    }
+
+    function openAddWalletChainModal() {
+        if (!els.addWalletChainModal) return;
+        if (els.customChainIdInput) els.customChainIdInput.value = '';
+        if (els.customChainLabelInput) els.customChainLabelInput.value = '';
+        if (els.customChainMarkInput) els.customChainMarkInput.value = '';
+        if (els.customChainSpeakInput) els.customChainSpeakInput.value = '';
+        els.addWalletChainModal.style.display = 'flex';
+        if (els.customChainIdInput) els.customChainIdInput.focus();
+    }
+
+    function closeAddWalletChainModal() {
+        if (els.addWalletChainModal) els.addWalletChainModal.style.display = 'none';
+    }
+
+    function addCustomWalletChain() {
+        const rawId = els.customChainIdInput ? els.customChainIdInput.value : '';
+        const id = normalizeWalletChain(rawId);
+        if (!isValidCustomChainId(id)) {
+            return showToast('链 ID 用小写字母开头，2-32 位字母或数字');
+        }
+        const catalog = getWalletChainCatalogItems();
+        if (catalog.some((chain) => chain.id === id)) {
+            return showToast('这条链已经在列表里');
+        }
+        const label = String(els.customChainLabelInput && els.customChainLabelInput.value || '').trim() || id.toUpperCase();
+        const mark = String(els.customChainMarkInput && els.customChainMarkInput.value || '').trim() || label.slice(0, 1);
+        const speakAs = String(els.customChainSpeakInput && els.customChainSpeakInput.value || '').trim();
+        const chain = normalizeCustomChain({ id, label, mark });
+        if (!chain) return showToast('自定义链格式无效');
+        customWalletChains = normalizeCustomWalletChains(customWalletChains.concat(chain));
+        chainSpeakAsMap = collectChainSpeakAsMap();
+        chainSpeakOnMap = collectChainSpeakOnMap();
+        chainSpeakAsMap[id] = speakAs || label;
+        chainSpeakOnMap[id] = false;
+        const selected = getSelectedWalletChains().concat(id);
+        closeAddWalletChainModal();
+        renderWalletChainSelector(selected);
+        saveWalletFilters(`已添加 ${chain.label}`);
+    }
+
+    function removeCustomWalletChain(chainId) {
+        const id = normalizeWalletChain(chainId);
+        const existed = customWalletChains.find((chain) => chain.id === id);
+        if (!existed) return;
+        customWalletChains = customWalletChains.filter((chain) => chain.id !== id);
+        chainSpeakAsMap = collectChainSpeakAsMap();
+        chainSpeakOnMap = collectChainSpeakOnMap();
+        delete chainSpeakAsMap[id];
+        delete chainSpeakOnMap[id];
+        const selected = getSelectedWalletChains().filter((chain) => chain !== id);
+        renderWalletChainSelector(selected);
+        saveWalletFilters(`已删除 ${existed.label}`);
+    }
+
+    renderWalletChainSelector(DEFAULT_WALLET_CHAINS);
 
     function showToast(message, duration = 2000) {
         els.toast.textContent = message;
@@ -565,6 +717,10 @@ document.addEventListener('DOMContentLoaded', () => {
             els.filterOther.checked = filters.other !== false; // 🌟 新增
 
             const walletFilters = result.walletFilters || { buy: true, sellReduce: true, sellClear: true, minAmount: 0 };
+            customWalletChains = normalizeCustomWalletChains(walletFilters.customChains);
+            chainSpeakAsMap = GmgnWalletEvent.normalizeChainSpeakAsMap(walletFilters.chainSpeakAs);
+            chainSpeakOnMap = normalizeChainSpeakOnMap(walletFilters.chainSpeakOn);
+            if (els.chainSpeakEnabled) els.chainSpeakEnabled.checked = walletFilters.chainSpeakEnabled === true;
             setWalletChainSelection(walletFilters.walletChains);
             els.filterBuy.checked = walletFilters.buy !== false;
             els.filterSellReduce.checked = walletFilters.sellReduce !== false;
@@ -968,9 +1124,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    els.testWalletBuyBtn.addEventListener('click', () => playWalletTTS("技术瓜买入比特币"));
-    els.testWalletSellReduceBtn.addEventListener('click', () => playWalletTTS("技术瓜减仓比特币"));
-    els.testWalletSellClearBtn.addEventListener('click', () => playWalletTTS("技术瓜清仓比特币"));
+    function getPreviewWalletSpeakAs() {
+        const selected = getSelectedWalletChains();
+        const settings = {
+            chainSpeakEnabled: isChainSpeakMasterEnabled(),
+            chainSpeakOn: collectChainSpeakOnMap(),
+            chainSpeakAs: collectChainSpeakAsMap(),
+            customChains: customWalletChains
+        };
+        const spoken = selected.find((chainId) => resolveWalletChainSpeakAs(chainId, settings));
+        return spoken ? resolveWalletChainSpeakAs(spoken, settings) : '';
+    }
+
+    function playWalletActionPreview(actionText) {
+        const prefix = getPreviewWalletSpeakAs();
+        playWalletTTS(`${prefix}技术瓜${actionText}比特币`);
+    }
+
+    els.testWalletBuyBtn.addEventListener('click', () => playWalletActionPreview('买入'));
+    els.testWalletSellReduceBtn.addEventListener('click', () => playWalletActionPreview('减仓'));
+    els.testWalletSellClearBtn.addEventListener('click', () => playWalletActionPreview('清仓'));
 
     // 🌟 系统设置 - 推特监控试听
     els.twitterTtsTestBtn.addEventListener('click', async () => {
@@ -1009,7 +1182,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 🌟 系统设置 - 钱包监控试听
-    els.walletTtsTestBtn.addEventListener('click', () => playWalletTTS("技术瓜买入比特币"));
+    els.walletTtsTestBtn.addEventListener('click', () => playWalletActionPreview('买入'));
 
     els.exportRulesBtn.addEventListener('click', () => {
         chrome.storage.local.get(['twitterAudioMappings'], (result) => {
@@ -1493,6 +1666,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 sellClearAddrCooldownEnabled: els.sellClearAddrCooldownEnabled.checked,
                 sellClearAddrCooldownTime: parseInt(els.sellClearAddrCooldownTime.value) || 15,
                 walletChains: getSelectedWalletChains(),
+                customChains: normalizeCustomWalletChains(customWalletChains),
+                chainSpeakEnabled: isChainSpeakMasterEnabled(),
+                chainSpeakOn: collectChainSpeakOnMap(),
+                chainSpeakAs: collectChainSpeakAsMap(),
                 minAmount: parseFloat(els.walletMinAmount.value) || 0,
                 maxAmount: parseFloat(els.walletMaxAmount.value) || 0,
                 minMcap: parseFloat(els.walletMinMcap.value) || 0,
@@ -1579,8 +1756,11 @@ document.addEventListener('DOMContentLoaded', () => {
     els.walletMaxAge.addEventListener('change', saveWalletFilters);
     if (els.selectAllWalletChainsBtn) {
         els.selectAllWalletChainsBtn.addEventListener('click', () => {
+            chainSpeakAsMap = collectChainSpeakAsMap();
+            chainSpeakOnMap = collectChainSpeakOnMap();
             getWalletChainInputs().forEach((input) => { input.checked = true; });
             updateWalletChainCount();
+            renderWalletChainSpeakList();
             saveWalletFilters('已开启全部链');
         });
     }
@@ -1588,6 +1768,47 @@ document.addEventListener('DOMContentLoaded', () => {
         els.resetWalletChainsBtn.addEventListener('click', () => {
             setWalletChainSelection(DEFAULT_WALLET_CHAINS);
             saveWalletFilters('已恢复默认链');
+        });
+    }
+    if (els.chainSpeakEnabled) {
+        els.chainSpeakEnabled.addEventListener('change', () => {
+            chainSpeakAsMap = collectChainSpeakAsMap();
+            chainSpeakOnMap = collectChainSpeakOnMap();
+            syncChainSpeakPanelState();
+            saveWalletFilters(els.chainSpeakEnabled.checked ? '已开启链名播报' : '已关闭链名播报');
+        });
+    }
+    if (els.addWalletChainBtn) {
+        els.addWalletChainBtn.addEventListener('click', openAddWalletChainModal);
+    }
+    if (els.cancelAddWalletChainBtn) {
+        els.cancelAddWalletChainBtn.addEventListener('click', closeAddWalletChainModal);
+    }
+    if (els.saveAddWalletChainBtn) {
+        els.saveAddWalletChainBtn.addEventListener('click', addCustomWalletChain);
+    }
+    if (els.addWalletChainModal) {
+        els.addWalletChainModal.addEventListener('click', (event) => {
+            if (event.target === els.addWalletChainModal) closeAddWalletChainModal();
+        });
+    }
+    if (els.customChainIdInput) {
+        const fillChainDefaults = () => {
+            const id = normalizeWalletChain(els.customChainIdInput.value);
+            if (!id) return;
+            if (els.customChainLabelInput && !els.customChainLabelInput.value.trim()) {
+                els.customChainLabelInput.placeholder = id.toUpperCase();
+            }
+            if (els.customChainMarkInput && !els.customChainMarkInput.value.trim()) {
+                els.customChainMarkInput.placeholder = id.slice(0, 1).toUpperCase();
+            }
+        };
+        els.customChainIdInput.addEventListener('input', fillChainDefaults);
+        els.customChainIdInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addCustomWalletChain();
+            }
         });
     }
     if (els.walletMaxTokenNameLen) {

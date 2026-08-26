@@ -7,6 +7,12 @@ const {
     normalizeChain,
     normalizeEnabledChains,
     isChainEnabled,
+    isValidCustomChainId,
+    normalizeCustomChains,
+    getChainCatalog,
+    getChainSpeakAs,
+    resolveChainSpeakAs,
+    collectEnabledSpeakAsTexts,
     buildEventId,
     buildTransactionKey,
     isTokenBlocked,
@@ -40,6 +46,59 @@ test('wallet chain filters normalize aliases and default conservatively', () => 
     assert.equal(isChainEnabled({ n: 'MONAD' }, ['monad']), true);
     assert.equal(isChainEnabled({ n: 'tron' }, []), false);
     assert.equal(isChainEnabled({}, DEFAULT_WALLET_CHAINS), false);
+});
+
+test('custom chains join the catalog and can be enabled without a plugin update', () => {
+    assert.equal(isValidCustomChainId('plasma'), true);
+    assert.equal(isValidCustomChainId('bsc'), true);
+    assert.equal(isValidCustomChainId('1chain'), false);
+    const custom = normalizeCustomChains([
+        { id: 'Plasma', label: 'Plasma', mark: 'P' },
+        { id: 'bsc', label: 'ShouldIgnore' },
+        { id: 'plasma', label: 'Duplicate' }
+    ]);
+    assert.deepEqual(custom.map((chain) => chain.id), ['plasma']);
+    assert.equal(custom[0].custom, true);
+    assert.equal(getChainCatalog(custom).some((chain) => chain.id === 'plasma'), true);
+    assert.deepEqual(normalizeEnabledChains(['plasma', 'unknown'], custom), ['plasma']);
+    assert.equal(isChainEnabled({ n: 'plasma' }, ['plasma'], custom), true);
+    assert.equal(isChainEnabled({ n: 'plasma' }, ['plasma']), false);
+});
+
+test('chain speak-as defaults to label, empty string disables prefix', () => {
+    assert.equal(getChainSpeakAs('bsc'), 'BSC');
+    assert.equal(getChainSpeakAs('base', { base: 'Base链' }), 'Base链');
+    assert.equal(getChainSpeakAs('bsc', { bsc: '' }), '');
+    assert.equal(getChainSpeakAs('plasma', { plasma: 'P' }, [{ id: 'plasma', label: 'Plasma' }]), 'P');
+    assert.equal(getChainSpeakAs('plasma', {}, [{ id: 'plasma', label: 'Plasma' }]), 'Plasma');
+});
+
+test('chain prefix is off unless master and the chain are both enabled', () => {
+    assert.equal(resolveChainSpeakAs('bsc'), '');
+    assert.equal(resolveChainSpeakAs('bsc', {
+        chainSpeakEnabled: true,
+        chainSpeakOn: { bsc: false },
+        chainSpeakAs: { bsc: 'BSC' }
+    }), '');
+    assert.equal(resolveChainSpeakAs('bsc', {
+        chainSpeakEnabled: true,
+        chainSpeakOn: { bsc: true },
+        chainSpeakAs: { bsc: 'B' }
+    }), 'B');
+    assert.equal(resolveChainSpeakAs('base', {
+        chainSpeakEnabled: true,
+        chainSpeakOn: { bsc: true }
+    }), '');
+    assert.deepEqual(collectEnabledSpeakAsTexts({
+        chainSpeakEnabled: true,
+        walletChains: ['bsc', 'base'],
+        chainSpeakOn: { bsc: true, base: false },
+        chainSpeakAs: { bsc: 'B', base: 'Base' }
+    }), ['B']);
+    assert.deepEqual(collectEnabledSpeakAsTexts({
+        walletChains: ['bsc'],
+        chainSpeakOn: { bsc: true }
+    }), []);
 });
 
 test('identical EVM transaction data on different chains does not collide', () => {
@@ -136,6 +195,34 @@ test('wallet speech keeps exactly two progressive audio segments', () => {
     }), ['聪明钱', '清仓GPU']);
 });
 
+test('chain speak-as becomes a leading cached audio segment', () => {
+    assert.deepEqual(buildSingleSpeechParts({
+        rename: '聪明钱',
+        action: 'buy',
+        tokenSymbol: 'GPU',
+        chainSpeakAs: 'BSC'
+    }), ['BSC', '聪明钱', '买入GPU']);
+    assert.deepEqual(buildSingleSpeechParts({
+        rename: '聪明钱',
+        action: 'sell',
+        ooc: 1,
+        tokenSymbol: 'GPU',
+        chainSpeakAs: 'B'
+    }), ['B', '聪明钱', '清仓GPU']);
+    assert.deepEqual(buildSingleSpeechParts({
+        rename: '聪明钱',
+        action: 'buy',
+        tokenSymbol: 'GPU',
+        chainSpeakAs: '  '
+    }), ['聪明钱', '买入GPU']);
+    assert.deepEqual(buildSpeechGroupParts({
+        groupAction: 'buy',
+        tokenSymbol: 'GPU',
+        chainSpeakAs: 'Base',
+        nameCounts: new Map([['聪明钱', 1]])
+    }), ['Base', '聪明钱', '买入GPU']);
+});
+
 test('grouped sell fallback retains each token symbol', () => {
     const speech = formatSpeechGroup({
         groupAction: 'sellProcessed',
@@ -181,6 +268,29 @@ test('wallet burst summary is bounded to recent groups and names', () => {
     ], 12, { maxGroups: 2, maxNames: 3 });
 
     assert.equal(speech, '阿峰3笔、狗头2笔、鸡Crazy等7笔减仓CHIP，聪明钱买入NEW，另4笔异动');
+});
+
+test('compact wallet summary prefixes each group with its chain speak-as', () => {
+    const speech = formatCompactSpeechGroups([
+        {
+            groupAction: 'buy',
+            tokenSymbol: 'PEPE',
+            chainSpeakAs: 'BSC',
+            nameCounts: new Map([['聪明钱', 1]]),
+            itemCount: 1,
+            lastQueuedAt: 200
+        },
+        {
+            groupAction: 'sellReduce',
+            tokenSymbol: 'CHIP',
+            chainSpeakAs: 'Base',
+            nameCounts: new Map([['阿峰', 2]]),
+            itemCount: 2,
+            lastQueuedAt: 100
+        }
+    ], 3);
+
+    assert.equal(speech, 'BSC聪明钱买入PEPE，Base阿峰2笔减仓CHIP');
 });
 
 test('wallet freshness uses WSS time and enforces a strict upper bound', () => {
@@ -266,6 +376,62 @@ test('ready action-token is queued before the leading playback job completes', a
 
     finishLeadingPlayback();
     assert.deepEqual(await playback, { ok: true, count: 2, playbackGroups: 2 });
+});
+
+test('greedy grouping stitches already-ready leading segments into one playback job', async () => {
+    const playedGroups = [];
+    const result = await playProgressiveSegmentGroups([
+        Promise.resolve('chain'),
+        Promise.resolve('cached-name'),
+        Promise.resolve('cached-action')
+    ], async (segments) => {
+        playedGroups.push(segments);
+        return { ok: true };
+    }, { greedy: true });
+
+    assert.deepEqual(playedGroups, [['chain', 'cached-name', 'cached-action']]);
+    assert.deepEqual(result, { ok: true, count: 3, playbackGroups: 1 });
+});
+
+test('greedy grouping plays ready leading segments when a later segment already failed', async () => {
+    const playedGroups = [];
+    await assert.rejects(
+        () => playProgressiveSegmentGroups([
+            Promise.resolve('cached-name'),
+            Promise.resolve(null)
+        ], async (segments) => {
+            playedGroups.push(segments);
+            return { ok: true };
+        }, { greedy: true }),
+        /segment_1_unavailable/
+    );
+    assert.deepEqual(playedGroups, [['cached-name']]);
+});
+
+test('greedy grouping keeps generating action-token as a later playback job', async () => {
+    let resolveAction;
+    const actionToken = new Promise((resolve) => {
+        resolveAction = resolve;
+    });
+    const playedGroups = [];
+    const playback = playProgressiveSegmentGroups([
+        Promise.resolve('chain'),
+        Promise.resolve('cached-name'),
+        actionToken
+    ], async (segments) => {
+        playedGroups.push(segments);
+        return { ok: true };
+    }, { greedy: true });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(playedGroups, [['chain', 'cached-name']]);
+
+    resolveAction('generated-action-token');
+    assert.deepEqual(await playback, { ok: true, count: 3, playbackGroups: 2 });
+    assert.deepEqual(playedGroups, [
+        ['chain', 'cached-name'],
+        ['generated-action-token']
+    ]);
 });
 
 test('queued processed and confirm stages merge into one final sell announcement', () => {

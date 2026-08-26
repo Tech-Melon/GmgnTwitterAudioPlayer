@@ -32,11 +32,17 @@ const buildWalletEventId = GmgnWalletEvent.buildEventId;
 const buildWalletTransactionKey = GmgnWalletEvent.buildTransactionKey;
 const isWalletTokenBlocked = GmgnWalletEvent.isTokenBlocked;
 const isWalletChainEnabled = GmgnWalletEvent.isChainEnabled;
+const normalizeWalletChain = GmgnWalletEvent.normalizeChain;
+const resolveWalletChainSpeakAs = GmgnWalletEvent.resolveChainSpeakAs;
+const collectWalletSpeakAsTexts = GmgnWalletEvent.collectEnabledSpeakAsTexts;
 const buildWalletSingleSpeechParts = GmgnWalletEvent.buildSingleSpeechParts;
 const formatCompactWalletSpeechGroups = GmgnWalletEvent.formatCompactSpeechGroups;
 const splitFreshWalletItems = GmgnWalletEvent.splitFreshItems;
 const playWalletSegmentGroups = GmgnWalletEvent.playProgressiveSegmentGroups;
 const mergePendingWalletSellConfirm = GmgnWalletEvent.mergePendingSellConfirm;
+const stitchTtsBlobs = (typeof GmgnTtsSeam !== 'undefined' && GmgnTtsSeam.stitchBlobs)
+    ? GmgnTtsSeam.stitchBlobs.bind(GmgnTtsSeam)
+    : async (blobs) => (Array.isArray(blobs) && blobs.length === 1 ? blobs[0] : null);
 let diagnosticSequence = 0;
 
 function debugLog(...args) {
@@ -1569,6 +1575,33 @@ function formatTokenNameForSpeech(name) {
     return s.length > max ? s.slice(0, max) : s;
 }
 
+function resolveWalletSpeakAs(chainId) {
+    return resolveWalletChainSpeakAs(chainId, configCache.walletFilters || {});
+}
+
+function prefetchWalletChainSpeakAs() {
+    const texts = collectWalletSpeakAsTexts(configCache.walletFilters || {});
+    if (texts.length > 0) prefetchTTSToCache(texts, 'wallet');
+}
+
+function attachWalletChain(item, rawChain) {
+    const chain = normalizeWalletChain(rawChain || (item && item.n));
+    if (!item) return { n: chain, chainSpeakAs: resolveWalletSpeakAs(chain) };
+    item.n = chain;
+    item.chainSpeakAs = resolveWalletSpeakAs(chain);
+    return item;
+}
+
+function buildWalletSpeechParts(item) {
+    if (!item) return [];
+    const sym = formatTokenNameForSpeech(item.tokenSymbol);
+    return buildWalletSingleSpeechParts({
+        ...item,
+        tokenSymbol: sym,
+        chainSpeakAs: item.chainSpeakAs != null ? item.chainSpeakAs : resolveWalletSpeakAs(item.n)
+    });
+}
+
 function buildWalletSpeechGroups(items) {
     const groups = new Map();
     items.filter(Boolean).forEach((item) => {
@@ -1578,11 +1611,15 @@ function buildWalletSpeechGroups(items) {
         if (item.action === 'sell') {
             groupAction = isClearAll ? 'sellClear' : 'sellReduce';
         }
-        const key = `${groupAction}_${tokenSymbol}`;
+        const chain = normalizeWalletChain(item.n);
+        const chainSpeakAs = item.chainSpeakAs != null ? item.chainSpeakAs : resolveWalletSpeakAs(chain);
+        const key = `${chain}_${groupAction}_${tokenSymbol}`;
         if (!groups.has(key)) {
             groups.set(key, {
                 groupAction,
                 tokenSymbol,
+                n: chain,
+                chainSpeakAs,
                 nameCounts: new Map(),
                 itemCount: 0,
                 lastQueuedAt: 0
@@ -1606,9 +1643,7 @@ function _buildWalletPrefetchTexts(items) {
 
     // 单笔：用分段格式（匹配 playWalletDirectly 单笔分支）
     if (validItems.length === 1) {
-        const t = validItems[0];
-        const sym = formatTokenNameForSpeech(t.tokenSymbol);
-        return buildWalletSingleSpeechParts({ ...t, tokenSymbol: sym });
+        return buildWalletSpeechParts(validItems[0]);
     }
 
     // 多笔：合成一个有界摘要，避免每组拆成多个固定时长的音频任务。
@@ -2655,6 +2690,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     syncWsBlocklist();
     syncDebugToggle();
     syncInjectFilters();
+    prefetchWalletChainSpeakAs();
 
     debugLog("⚙️ [GMGN 盯盘伴侣] 配置加载完成:", {
         mappingCount: Object.keys(configCache.mappings).length,
@@ -2744,10 +2780,12 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.twitterTts) configCache.twitterTts = normalizeTtsConfig(changes.twitterTts.newValue);
         if (changes.walletTts) {
             configCache.walletTts = normalizeTtsConfig(changes.walletTts.newValue);
+            prefetchWalletChainSpeakAs();
         }
         if (changes.walletFilters) {
             configCache.walletFilters = changes.walletFilters.newValue;
             syncInjectFilters();
+            prefetchWalletChainSpeakAs();
         }
         if (changes.walletDictionary) {
             configCache.walletDictionary = changes.walletDictionary.newValue;
@@ -2840,6 +2878,18 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
         playChannelAudio(chrome.runtime.getURL(fallbackAudio), 'tts', source, null, onComplete);
     };
 
+    async function toSeamlessBlobs(blobs) {
+        const valid = (Array.isArray(blobs) ? blobs : [blobs]).filter(Boolean);
+        if (valid.length <= 1) return valid;
+        try {
+            const stitched = await stitchTtsBlobs(valid);
+            if (stitched) return [stitched];
+        } catch (error) {
+            debugLog('⚠️ [GMGN 盯盘伴侣 - TTS] 段拼接失败，回退逐段播放', error && error.message);
+        }
+        return valid;
+    }
+
     // 所有片段立即并行查缓存/请求；钱包多段按顺序渐进播放，不等待慢片段全部生成。
     const segmentPromises = items.map((item) => fetchAudioBlob(item).catch(() => null));
     if (source === 'wallet' && items.length > 1 && (OFFSCREEN_AUDIO_ONLY || isPageBackgrounded())) {
@@ -2862,9 +2912,13 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
                     });
                 }
                 try {
+                    const playBlobs = await toSeamlessBlobs(blobs);
+                    if (playBlobs.length === 0) {
+                        throw new Error(`segment_${group.startIndex}_unavailable`);
+                    }
                     return await playViaOffscreen(
                         'tts',
-                        blobs,
+                        playBlobs,
                         ttsVol,
                         null,
                         source,
@@ -2873,7 +2927,8 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
                             progressive: true,
                             segmentIndex: group.startIndex,
                             segmentGroupSize: group.segmentCount,
-                            segmentCount: group.totalSegments
+                            segmentCount: group.totalSegments,
+                            stitched: playBlobs.length === 1 && blobs.length > 1
                         },
                         {
                             segmentGapMs: 0,
@@ -2886,7 +2941,7 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
                 } finally {
                     if (!dispatched) releaseDispatch();
                 }
-            });
+            }, { greedy: true });
             diagnosticLog('tts_ready', {
                 ...traceContext,
                 source,
@@ -2907,6 +2962,9 @@ async function playNetworkTTS(textItems, source = 'twitter', onComplete = null, 
         const blobs = await Promise.all(segmentPromises);
         validBlobs = blobs.filter(b => b !== null);
         if (validBlobs.length === 0) throw new Error('所有 TTS 段获取失败');
+        if (source === 'wallet' && validBlobs.length > 1) {
+            validBlobs = await toSeamlessBlobs(validBlobs);
+        }
         diagnosticLog('tts_ready', {
             ...traceContext,
             source,
@@ -3482,26 +3540,9 @@ function playWalletDirectly(list) {
     // 🌟 降级处理：只有一笔待播，完美兼容原先单发逻辑
     if (currentItems.length === 1) {
         const t = currentItems[0];
-        const sym = formatTokenNameForSpeech(t.tokenSymbol);
-
-        if (t.action === 'buy') {
-            debugLog(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包: "${t.rename}买入 ${sym}"`);
-            playNetworkTTS(
-                buildWalletSingleSpeechParts({ ...t, tokenSymbol: sym }),
-                'wallet',
-                onComplete,
-                walletDiagnostic
-            );
-        } else {
-            const actionText = t.ooc === 1 ? '清仓' : '减仓';
-            debugLog(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包: "${t.rename}${actionText} ${sym}"`);
-            playNetworkTTS(
-                buildWalletSingleSpeechParts({ ...t, tokenSymbol: sym }),
-                'wallet',
-                onComplete,
-                walletDiagnostic
-            );
-        }
+        const speechParts = buildWalletSpeechParts(t);
+        debugLog(`✅ [GMGN 盯盘伴侣 - 已播报] 钱包: "${speechParts.join('')}"`);
+        playNetworkTTS(speechParts, 'wallet', onComplete, walletDiagnostic);
         return;
     }
 
@@ -3524,7 +3565,7 @@ async function handleWalletMsg(e) {
         if (item.s !== 'buy' && item.s !== 'sell') return;
         // 非播放 Tab：静默，不写诊断、不上报，只靠心跳维持候选资格
         if (!canSubmitMonitorEvents()) return;
-        if (isCacheReady && !isWalletChainEnabled(item, configCache.walletFilters && configCache.walletFilters.walletChains)) {
+        if (isCacheReady && !isWalletChainEnabled(item, configCache.walletFilters && configCache.walletFilters.walletChains, configCache.walletFilters && configCache.walletFilters.customChains)) {
             logWalletSkip('该链播报未启用', item, { chain: item.n || '' });
             return;
         }
@@ -3560,7 +3601,11 @@ async function handleWalletMsg(e) {
             logWalletSkip('钱包播报开关已关闭', item, { wssReceivedAt });
             return;
         }
-        if (!isWalletChainEnabled(item, configCache.walletFilters && configCache.walletFilters.walletChains)) {
+        if (!isWalletChainEnabled(
+            item,
+            configCache.walletFilters && configCache.walletFilters.walletChains,
+            configCache.walletFilters && configCache.walletFilters.customChains
+        )) {
             logWalletSkip('该链播报未启用', item, { chain: item && item.n });
             return;
         }
@@ -3664,6 +3709,7 @@ async function handleWalletMsg(e) {
     }
     
     let rename = walletInfo.rename.trim();
+    const chain = normalizeWalletChain(item.n);
     const txHash = item.h;
     const txStateKey = buildWalletTransactionKey(item);
 
@@ -3799,7 +3845,7 @@ async function handleWalletMsg(e) {
             walletLastPlayed.set(dbKey, now);
         }
         markEventPlayed(walletFingerprint);
-        DynamicPlaybackScheduler.triggerWallet({
+        DynamicPlaybackScheduler.triggerWallet(attachWalletChain({
             txHash,
             txStateKey,
             rename,
@@ -3813,7 +3859,7 @@ async function handleWalletMsg(e) {
             _processingState: txHash ? 'processing_buy' : null,
             _successState: true,
             _previousState: previousState
-        });
+        }, chain));
     } else {
         // 卖出 processed 先等待短暂 confirm 窗口，只生成一次最终减仓/清仓播报。
         if (txHash) {
@@ -3825,7 +3871,7 @@ async function handleWalletMsg(e) {
 
                 walletLastPlayed.set(txStateKey, 'waiting_sell_confirm');
                 markEventPlayed(walletFingerprint);
-                const processedItem = {
+                const processedItem = attachWalletChain({
                     txHash,
                     txStateKey,
                     rename,
@@ -3839,7 +3885,7 @@ async function handleWalletMsg(e) {
                     _processingState: 'waiting_sell_confirm',
                     _successState: true,
                     _previousState: undefined
-                };
+                }, chain);
                 markCoordinatorEventScheduled(coordinatorEventId);
                 schedulePendingWalletSell(processedItem);
             } else if (cnt === 'confirm') {
@@ -3865,7 +3911,7 @@ async function handleWalletMsg(e) {
                     return;
                 }
 
-                const confirmItem = {
+                const confirmItem = attachWalletChain({
                     txHash,
                     txStateKey,
                     rename,
@@ -3879,7 +3925,7 @@ async function handleWalletMsg(e) {
                     _processingState: 'processing_confirm',
                     _successState: true,
                     _previousState: undefined
-                };
+                }, chain);
                 const processedItem = cancelPendingWalletSell(txStateKey);
                 walletLastPlayed.set(txStateKey, 'processing_confirm');
                 markEventPlayed(walletFingerprint);
@@ -3912,7 +3958,17 @@ async function handleWalletMsg(e) {
             }
             markEventPlayed(walletFingerprint);
             // 🚀 无 txHash 降级路径，通过调度器统一播放
-            DynamicPlaybackScheduler.triggerWallet({ txHash: null, rename, tokenSymbol, action, ooc: item.ooc, cnt: null, walletFingerprint, wssReceivedAt, _coordinatorEventId: coordinatorEventId });
+            DynamicPlaybackScheduler.triggerWallet(attachWalletChain({
+                txHash: null,
+                rename,
+                tokenSymbol,
+                action,
+                ooc: item.ooc,
+                cnt: null,
+                walletFingerprint,
+                wssReceivedAt,
+                _coordinatorEventId: coordinatorEventId
+            }, chain));
         }
     }
 

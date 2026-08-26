@@ -326,6 +326,141 @@
             white-space: nowrap;
             font-size: 11px;
             font-weight: 500;
+            flex: 1;
+        }
+        .wallet-chain-remove {
+            width: 16px;
+            height: 16px;
+            flex: 0 0 16px;
+            border: none;
+            border-radius: 50%;
+            background: transparent;
+            color: var(--text-sec);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0;
+        }
+        .wallet-chain-remove:hover {
+            color: #ff3b30;
+            background: rgba(255, 59, 48, 0.12);
+        }
+        .wallet-chain-add {
+            justify-content: center;
+            border: 1px dashed #c7c7cc;
+            background: transparent;
+            color: var(--text-sec);
+            font-size: 11px;
+            font-weight: 600;
+            gap: 4px;
+        }
+        .wallet-chain-add:hover {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+            background: rgba(52, 199, 89, 0.06);
+        }
+        .wallet-chain-speak {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(0, 0, 0, 0.06);
+        }
+        .wallet-chain-speak-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 2px;
+        }
+        .wallet-chain-speak-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-main);
+            cursor: pointer;
+        }
+        .wallet-chain-speak-toggle input {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+            accent-color: var(--primary-color);
+        }
+        .wallet-chain-speak-hint {
+            font-size: 10px;
+            color: var(--text-sec);
+            line-height: 1.4;
+            margin-bottom: 6px;
+        }
+        .wallet-chain-speak-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 5px;
+        }
+        .wallet-chain-speak-grid.is-disabled {
+            opacity: 0.45;
+        }
+        .wallet-chain-speak-item {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 6px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.035);
+        }
+        .wallet-chain-speak-item input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            flex: 0 0 14px;
+            margin: 0;
+            accent-color: var(--primary-color);
+        }
+        .wallet-chain-speak-label {
+            flex: 0 0 auto;
+            max-width: 36%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 10px;
+            color: var(--text-sec);
+        }
+        .wallet-chain-speak-item input[type="text"] {
+            min-width: 0;
+            flex: 1;
+            height: 22px;
+            margin: 0;
+            padding: 0 6px;
+            border: 1px solid #d2d2d7;
+            border-radius: 5px;
+            font-size: 11px;
+            box-sizing: border-box;
+        }
+        .wallet-chain-modal-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        .wallet-chain-modal-field label {
+            font-size: 11px;
+            color: var(--text-sec);
+            margin: 0;
+        }
+        .wallet-chain-modal-field input {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 13px;
+        }
+        .wallet-chain-modal-hint {
+            font-size: 10px;
+            color: var(--text-sec);
+            line-height: 1.4;
+            margin: 0 0 10px;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -333,6 +468,11 @@
             .wallet-chain-action { border-color: #545458; }
             .wallet-chain-option { background: rgba(255, 255, 255, 0.06); }
             .wallet-chain-option:hover { background: rgba(255, 255, 255, 0.1); }
+            .wallet-chain-add { border-color: #545458; }
+            .wallet-chain-speak { border-top-color: rgba(255, 255, 255, 0.08); }
+            .wallet-chain-speak-item { background: rgba(255, 255, 255, 0.06); }
+            .wallet-chain-speak-item input[type="text"],
+            .wallet-chain-modal-field input { background: #1c1c1e; color: #f5f5f7; border-color: #3a3a3c; }
         }
 
         /* WSS 屏蔽 / 钱包导出 折叠：隐藏默认三角，避免与自定义 ▸ 重复 */
@@ -821,11 +961,22 @@
                         <span id="walletChainCount" class="wallet-chain-count">已选 5/12</span>
                     </div>
                     <div class="wallet-chain-actions">
+                        <button id="addWalletChainBtn" type="button" class="wallet-chain-action">+ 自定义</button>
                         <button id="selectAllWalletChainsBtn" type="button" class="wallet-chain-action">全选</button>
                         <button id="resetWalletChainsBtn" type="button" class="wallet-chain-action">默认</button>
                     </div>
                 </div>
                 <div id="walletChainList" class="wallet-chain-grid"></div>
+                <div class="wallet-chain-speak">
+                    <div class="wallet-chain-speak-header">
+                        <label class="wallet-chain-speak-toggle">
+                            <input type="checkbox" id="chainSpeakEnabled">
+                            <span>念链名前缀</span>
+                        </label>
+                    </div>
+                    <div class="wallet-chain-speak-hint">默认关闭。打开总开关后，再勾选要念的链，并可把 BSC 改成 B / BNB。</div>
+                    <div id="walletChainSpeakList" class="wallet-chain-speak-grid"></div>
+                </div>
             </div>
             <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -1149,6 +1300,34 @@
             <div class="modal-actions">
                 <button id="cancelEditBtn" class="outline">取消</button>
                 <button id="saveEditBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 自定义链弹窗 -->
+    <div class="modal-overlay" id="addWalletChainModal">
+        <div class="modal">
+            <h3>添加自定义链</h3>
+            <p class="wallet-chain-modal-hint">填写 GMGN 钱包活动里的链标识（小写无空格）。新链上线后不用等插件更新，自己加上就能播。</p>
+            <div class="wallet-chain-modal-field">
+                <label for="customChainIdInput">链 ID *</label>
+                <input type="text" id="customChainIdInput" placeholder="例如 plasma / berachain" maxlength="32" autocomplete="off">
+            </div>
+            <div class="wallet-chain-modal-field">
+                <label for="customChainLabelInput">显示名称</label>
+                <input type="text" id="customChainLabelInput" placeholder="例如 Plasma" maxlength="24" autocomplete="off">
+            </div>
+            <div class="wallet-chain-modal-field">
+                <label for="customChainMarkInput">字母标记</label>
+                <input type="text" id="customChainMarkInput" placeholder="P" maxlength="2" autocomplete="off">
+            </div>
+            <div class="wallet-chain-modal-field">
+                <label for="customChainSpeakInput">播报词</label>
+                <input type="text" id="customChainSpeakInput" placeholder="留空则用显示名称" maxlength="16" autocomplete="off">
+            </div>
+            <div class="modal-actions">
+                <button id="cancelAddWalletChainBtn" class="outline">取消</button>
+                <button id="saveAddWalletChainBtn">添加</button>
             </div>
         </div>
     </div>
