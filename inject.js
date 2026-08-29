@@ -25,12 +25,15 @@
     // ════════════════════════════════════════════════════════
     // 🫀 WSS 保活与健康监测
     // 后台标签页定时器被 Chrome 强节流（1 次/分钟），GMGN 页面自身的
-    // 10s 推送心跳会失效导致服务端断线（推特/钱包推送时断时续直至全停）。
-    // 扩展消息不受节流：SW 每 ~10s 触发 GMGN_WS_KEEPALIVE，由此代发心跳帧。
+    // 心跳会失效导致服务端断线（推特/钱包推送时断时续直至全停）。
+    // 扩展消息不受节流：SW 每 ~10s 触发 GMGN_WS_KEEPALIVE。
+    // 仅当该连接超过 KEEPALIVE_IDLE_MS 无页面出站时才代发心跳，
+    // 避免与 GMGN 自带心跳撞车、抬高右下角延迟检测。
     // ════════════════════════════════════════════════════════
     const monitoredSockets = new Set();
     const WS_DISCONNECT_ALERT_MS = 60000;  // 无存活推送连接超过 1 分钟判定异常
     const WS_SILENT_ALERT_MS = 90000;      // 连接看似存活但 90s 无任何帧判定僵死
+    const KEEPALIVE_IDLE_MS = 12000;       // 覆盖主通道 5s / 账号通道 10s 心跳
     const wsHealth = {
         everEligible: false,
         lastEligibleOpenAt: 0,
@@ -63,6 +66,8 @@
         monitoredSockets.forEach(function (ws) {
             if (ws.readyState === 1 && ws.__gmgnKeepaliveEligible) {
                 openEligible += 1;
+                const lastPageSendAt = ws.__gmgnLastPageSendAt || 0;
+                if (lastPageSendAt && (now - lastPageSendAt) < KEEPALIVE_IDLE_MS) return;
                 try {
                     if (ws.__gmgnOriginalSend) ws.__gmgnOriginalSend(buildKeepaliveFrame());
                 } catch (e) {
@@ -310,8 +315,10 @@
                 debugLog(`🚫 [GMGN 盯盘伴侣 - Inject] 已拦截 WSS 订阅: ${channel}`);
                 return;
             }
-            // 页面发出 subscribe/heartbeat 协议帧 → 该 socket 是用户推送连接
-            if (!ws.__gmgnKeepaliveEligible && typeof data === 'string' && data.indexOf('"action":') !== -1) {
+            // 页面发出 subscribe/heartbeat 协议帧 → 该 socket 是用户推送连接。
+            // lastPageSendAt 只记页面出站（本包装器），代发走 originalSend 不会更新。
+            if (typeof data === 'string' && data.indexOf('"action":') !== -1) {
+                ws.__gmgnLastPageSendAt = Date.now();
                 markSocketKeepaliveEligible(ws);
             }
             return originalSend(data);
