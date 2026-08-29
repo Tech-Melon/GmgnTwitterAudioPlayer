@@ -111,6 +111,11 @@ async function flushDiagnosticLogs() {
     diagnosticFlushInFlight = true;
     const batch = diagnosticBuffer.splice(0, 100);
     try {
+        // 强制校验：诊断数据只允许发往本机 loopback 地址，杜绝明文诊断数据被发送到真实网络中的风险
+        const diagnosticHost = new URL(DIAGNOSTIC_ENDPOINT).hostname;
+        if (diagnosticHost !== '127.0.0.1' && diagnosticHost !== 'localhost' && diagnosticHost !== '[::1]') {
+            return;
+        }
         const response = await fetch(DIAGNOSTIC_ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
