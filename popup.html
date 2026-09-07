@@ -63,6 +63,11 @@
                 color: #f5f5f7 !important;
                 border-color: #3a3a3c !important;
             }
+
+            .setting-block + .setting-block,
+            .setting-row + .setting-row {
+                border-color: #3a3a3c;
+            }
         }
 
         :root {
@@ -220,6 +225,52 @@
             font-size: 14px;
             color: var(--text-sec);
             font-weight: 500;
+        }
+
+        .setting-block + .setting-block {
+            margin-top: 4px;
+            padding-top: 14px;
+            border-top: 1px solid #e5e5ea;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .setting-row + .setting-row {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px dashed #e5e5ea;
+        }
+
+        .setting-row-text {
+            min-width: 0;
+            padding-right: 4px;
+        }
+
+        .setting-row-title {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+            line-height: 1.3;
+        }
+
+        .setting-row-hint {
+            margin: 4px 0 0;
+            font-size: 11px;
+            color: var(--text-sec);
+            line-height: 1.35;
+        }
+
+        .setting-foot {
+            margin: 10px 0 0;
+            font-size: 11px;
+            color: var(--text-sec);
+            line-height: 1.35;
         }
 
         /* 钱包链筛选：沿用 GMGN 的浅色行、链图标和全选布局 */
@@ -864,29 +915,42 @@
     <!-- 推特监控 Tab -->
     <div id="tab-twitter" class="tab-content active">
         <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <h4 style="margin: 0;">未配置规则账号发推提醒</h4>
-                <label class="switch">
-                    <input type="checkbox" id="playDefaultToggle" checked>
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div id="ttsSubSetting" style="display: flex; justify-content: space-between; align-items: center; padding-left: 12px; border-left: 2px solid #e5e5ea; margin-left: 4px; transition: opacity 0.3s ease;">
-                <h4 style="margin: 0; font-size: 13px; color: var(--text-sec);">↳ 使用 AI 语音念昵称（未配置 / 通用音默认走 TTS）</h4>
-                <label class="switch" style="transform: scale(0.9); transform-origin: right center; flex-shrink: 0;">
-                    <input type="checkbox" id="enableTTSToggle" checked>
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px dashed #e5e5ea;">
-                <div style="padding-right: 10px;">
-                    <h4 style="margin: 0;">已备注但无专属音账号提醒</h4>
-                    <p style="margin: 4px 0 0; font-size: 11px; color: var(--text-sec); line-height: 1.35;">规则里写了备注/ID，但未绑定专属或自定义铃声时，是否播报</p>
+            <div class="setting-block">
+                <h4>谁发推时出声</h4>
+                <div class="setting-row">
+                    <div class="setting-row-text">
+                        <p class="setting-row-title">名单外的账号也播报</p>
+                        <p class="setting-row-hint">时间线上刷到、你没加过的号</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="playDefaultToggle" checked>
+                        <span class="slider"></span>
+                    </label>
                 </div>
-                <label class="switch" style="flex-shrink: 0;">
-                    <input type="checkbox" id="playMappedGenericToggle" checked>
-                    <span class="slider"></span>
-                </label>
+                <div class="setting-row">
+                    <div class="setting-row-text">
+                        <p class="setting-row-title">名单里没专属铃的也播报</p>
+                        <p class="setting-row-hint">加过 ID / 备注，铃声还是默认音</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="playMappedGenericToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <p class="setting-foot">绑了专属铃的账号始终播报，不受上面影响</p>
+            </div>
+            <div class="setting-block">
+                <h4>怎么播</h4>
+                <div class="setting-row">
+                    <div class="setting-row-text">
+                        <p class="setting-row-title">用 AI 念出名字</p>
+                        <p class="setting-row-hint">关掉则只叮一声。有备注念备注，没有念昵称</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="enableTTSToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
         </div>
 

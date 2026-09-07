@@ -177,9 +177,9 @@ document.addEventListener('DOMContentLoaded', () => {
         enableTwitterToggle: document.getElementById('enableTwitterToggle'),
         enableWalletToggle: document.getElementById('enableWalletToggle'),
         debugLoggingToggle: document.getElementById('debugLoggingToggle'),
-        playDefaultToggle: document.getElementById('playDefaultToggle'), // 未配置规则提醒
-        enableTTSToggle: document.getElementById('enableTTSToggle'), // TTS 开关
-        playMappedGenericToggle: document.getElementById('playMappedGenericToggle'), // 已备注无专属音
+        playDefaultToggle: document.getElementById('playDefaultToggle'), // 名单外账号提醒
+        enableTTSToggle: document.getElementById('enableTTSToggle'), // AI 念名
+        playMappedGenericToggle: document.getElementById('playMappedGenericToggle'), // 名单内无专属铃
         updateNoticeModal: document.getElementById('updateNoticeModal'),
         updateNoticeTitle: document.getElementById('updateNoticeTitle'),
         updateNoticeSub: document.getElementById('updateNoticeSub'),
@@ -707,12 +707,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
-            // 🌟 联动子集 UI：如果总开关关闭，则把子开关置灰并禁用
-            const ttsSubSetting = document.getElementById('ttsSubSetting');
-            if (ttsSubSetting) {
-                ttsSubSetting.style.opacity = els.playDefaultToggle.checked ? '1' : '0.4';
-                ttsSubSetting.style.pointerEvents = els.playDefaultToggle.checked ? 'auto' : 'none';
-            }
             els.filterTweet.checked = filters.tweet !== false;
             els.filterRepost.checked = filters.repost !== false;
             els.filterReply.checked = filters.reply !== false;
@@ -1390,25 +1384,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     els.playDefaultToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ playDefaultUnmapped: e.target.checked }, () => {
-            showToast(e.target.checked ? '已开启未配置规则提醒' : '已关闭未配置规则提醒');
-
-            // 🌟 联动子集 UI
-            const ttsSubSetting = document.getElementById('ttsSubSetting');
-            if (ttsSubSetting) {
-                ttsSubSetting.style.opacity = e.target.checked ? '1' : '0.4';
-                ttsSubSetting.style.pointerEvents = e.target.checked ? 'auto' : 'none';
-            }
+            showToast(e.target.checked ? '已开启：名单外账号也播报' : '已关闭：名单外账号静音');
         });
     });
     els.enableTTSToggle.addEventListener('change', (e) => {
         chrome.storage.local.set({ enableTTS: e.target.checked }, () => {
-            showToast(e.target.checked ? '已开启 AI 念昵称（默认 TTS）' : '已关闭 TTS，将播 default 提示音');
+            showToast(e.target.checked ? '已开启：用 AI 念出名字' : '已关闭：只叮一声');
         });
     });
     if (els.playMappedGenericToggle) {
         els.playMappedGenericToggle.addEventListener('change', (e) => {
             chrome.storage.local.set({ playMappedGeneric: e.target.checked === true }, () => {
-                showToast(e.target.checked ? '已开启：备注账号(无专属音)提醒' : '已关闭：备注账号(无专属音)静默');
+                showToast(e.target.checked ? '已开启：名单账号(无专属铃)也播报' : '已关闭：名单账号(无专属铃)静音');
             });
         });
     }
