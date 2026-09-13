@@ -114,6 +114,7 @@
     window.__GMGN_AUDIO_ENABLED = true;
     window.__GMGN_ENABLE_TWITTER = true;
     window.__GMGN_ENABLE_WALLET = true;
+    window.__GMGN_ENABLE_GMGN = true;
     window.__GMGN_WS_BLOCKLIST = window.__GMGN_WS_BLOCKLIST instanceof Set
         ? window.__GMGN_WS_BLOCKLIST
         : new Set();
@@ -144,11 +145,13 @@
         if (typeof d.master === 'boolean') window.__GMGN_AUDIO_ENABLED = d.master;
         if (typeof d.twitter === 'boolean') window.__GMGN_ENABLE_TWITTER = d.twitter;
         if (typeof d.wallet === 'boolean') window.__GMGN_ENABLE_WALLET = d.wallet;
+        if (typeof d.gmgn === 'boolean') window.__GMGN_ENABLE_GMGN = d.gmgn;
         const filter = window.__GMGN_FILTER;
         if (filter) {
             if (typeof d.master === 'boolean') filter.master = d.master;
             if (typeof d.twitter === 'boolean') filter.twitter = d.twitter;
             if (typeof d.wallet === 'boolean') filter.wallet = d.wallet;
+            if (typeof d.gmgn === 'boolean') filter.gmgn = d.gmgn;
         }
         debugLog('🎚️ [GMGN 盯盘伴侣 - Inject] 通道开关:', {
             master: window.__GMGN_AUDIO_ENABLED,
@@ -190,6 +193,8 @@
             master: d.master !== false,
             twitter: d.twitter !== false,
             wallet: d.wallet !== false,
+            gmgn: d.gmgn !== false,
+            debot: d.debot !== false,
             walletChains: nextChains && nextChains.size > 0 ? nextChains : null,
             blockedTokens: nextBlocked,
             walletAddrs: nextAddrs && nextAddrs.size > 0 ? nextAddrs : null
@@ -197,6 +202,7 @@
         if (typeof d.master === 'boolean') window.__GMGN_AUDIO_ENABLED = d.master;
         if (typeof d.twitter === 'boolean') window.__GMGN_ENABLE_TWITTER = d.twitter;
         if (typeof d.wallet === 'boolean') window.__GMGN_ENABLE_WALLET = d.wallet;
+        if (typeof d.gmgn === 'boolean') window.__GMGN_ENABLE_GMGN = d.gmgn;
         debugLog('🎛️ [GMGN 盯盘伴侣 - Inject] 过滤状态同步:', {
             isProcessor: window.__GMGN_FILTER.isProcessor,
             chains: window.__GMGN_FILTER.walletChains ? window.__GMGN_FILTER.walletChains.size : 0,
@@ -339,6 +345,7 @@
                 if (ws.__gmgnKeepaliveEligible) wsHealth.lastFrameAt = wssReceivedAt;
             }
             if (!window.__GMGN_AUDIO_ENABLED) return;
+            if (window.__GMGN_ENABLE_GMGN === false) return;
 
             // 非 Processor Tab：MAIN 世界直接丢弃，避免 N 倍 CustomEvent + content 处理
             // roleKnown 之前不按角色丢弃，避免注册完成前的启动空窗漏报
@@ -372,9 +379,14 @@
                         if (!tweetData) return;
                         const actionType = tweetData.tw || 'unknown';
                         if (tweetData.u && tweetData.u.s) {
-                            triggersMap.set(tweetData.u.s, {
+                            const twitterId = window.GmgnTwitterEvent
+                                && typeof window.GmgnTwitterEvent.normalizeHandle === 'function'
+                                ? window.GmgnTwitterEvent.normalizeHandle(tweetData.u.s)
+                                : String(tweetData.u.s).trim().replace(/^@+/, '').toLowerCase();
+                            if (!twitterId) return;
+                            triggersMap.set(twitterId, {
                                 actionType,
-                                displayName: tweetData.u.n || tweetData.u.s
+                                displayName: tweetData.u.n || twitterId
                             });
                         }
                     });

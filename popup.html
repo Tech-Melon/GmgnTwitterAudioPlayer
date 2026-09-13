@@ -899,7 +899,7 @@
     <div id="toast">操作成功</div>
 
     <div class="header">
-        <h2 class="header-title"><span class="icon">🍉</span> GMGN 盯盘伴侣</h2>
+        <h2 class="header-title"><span class="icon">🍉</span> 技术瓜盯盘伴侣</h2>
         <a href="https://twitter.com/0xTechMelon" target="_blank" style="text-decoration: none; display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 14px; border: 1px solid #d2d2d7; font-size: 12px; color: var(--text-main); background: var(--card-bg);">
             <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px; fill: currentColor;"><g><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 22.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.008 5.92H5.078z"></path></g></svg>
             <span style="font-weight: 500;">0xTechMelon</span>
@@ -1232,7 +1232,7 @@
                 </label>
             </div>
             <div style="font-size: 11px; color: #ff9500; padding: 0 4px; line-height: 1.4;">
-                * 注意：实际播报音量受 GMGN 网页所在标签页系统音量影响，请确保未将网页静音。
+                * 注意：实际播报音量受当前网页标签页系统音量影响，请确保未将网页静音。
             </div>
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e5ea; display: flex; justify-content: space-between; align-items: center; gap: 12px;">
                 <div style="min-width: 0;">
@@ -1247,6 +1247,33 @@
             <div style="margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
                 <span style="font-size: 12px; color: var(--text-sec);">当前版本 <b id="appVersionLabel" style="color: var(--text-main);">—</b></span>
                 <button type="button" id="showUpdateNotesBtn" class="outline" style="font-size: 12px; padding: 6px 10px; white-space: nowrap;">查看更新说明</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="setting-block">
+                <h4>在哪些网站出声</h4>
+                <div class="setting-row">
+                    <div class="setting-row-text">
+                        <p class="setting-row-title">GMGN</p>
+                        <p class="setting-row-hint">关掉后 GMGN 页面不再播报</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="enableGmgnToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-row-text">
+                        <p class="setting-row-title">Debot</p>
+                        <p class="setting-row-hint">关掉后 Debot 页面不再播报</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="enableDebotToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <p class="setting-foot">两个都开时两边都会出声，只开一个可避免叠音</p>
             </div>
         </div>
 

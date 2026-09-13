@@ -797,7 +797,14 @@ function handleKeepaliveTick() {
     }
     // SW 冷启动后监控表为空：按 URL 找回 GMGN 标签页
     try {
-        chrome.tabs.query({ url: ['*://*.gmgn.ai/*', '*://gmgn.ai/*'] }, (tabs) => {
+        chrome.tabs.query({
+            url: [
+                '*://*.gmgn.ai/*',
+                '*://gmgn.ai/*',
+                '*://*.debot.ai/*',
+                '*://debot.ai/*'
+            ]
+        }, (tabs) => {
             if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
             tabs.forEach((tab) => {
                 if (tab && Number.isInteger(tab.id)) sendWssKeepaliveToTab(tab.id);

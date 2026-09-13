@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const {
     stableStringify,
     buildEventId,
-    buildSemanticKey
+    buildSemanticKey,
+    normalizeHandle
 } = require('../lib/twitter-event.js');
 
 test('twitter event id ignores outer WSS envelope and object key order', () => {
@@ -22,6 +23,17 @@ test('different tweet ids from the same account remain distinct', () => {
     assert.notEqual(buildEventId(first), buildEventId(second));
     assert.equal(
         buildSemanticKey([{ id: 'binancezh', tw: 'tweet' }]),
+        buildSemanticKey([{ id: 'binancezh', tw: 'tweet' }])
+    );
+});
+
+test('normalizeHandle strips @ and lowercases', () => {
+    assert.equal(normalizeHandle('@BinanceZH'), 'binancezh');
+});
+
+test('semantic key treats @Handle and handle as the same account', () => {
+    assert.equal(
+        buildSemanticKey([{ id: '@BinanceZH', tw: 'tweet' }]),
         buildSemanticKey([{ id: 'binancezh', tw: 'tweet' }])
     );
 });

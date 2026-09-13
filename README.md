@@ -1,8 +1,8 @@
 # 🍉 插件已上线谷歌商店，欢迎体验
-  直达链接：[GMGN 盯盘伴侣](https://chromewebstore.google.com/detail/neojnomamoipnncfjmbaipelkoenocco?utm_source=item-share-cb)
-# 🍉 GMGN 盯盘伴侣
+  直达链接：[技术瓜盯盘伴侣](https://chromewebstore.google.com/detail/neojnomamoipnncfjmbaipelkoenocco?utm_source=item-share-cb)
+# 🍉 技术瓜盯盘伴侣
 
-一款专为 GMGN 用户打造的**推特监控 + 钱包监控**实时语音播报插件。
+给 **GMGN、Debot** 用的**推特监控 + 钱包监控**实时语音播报插件。
 
 大V发推、聪明钱买卖——不用死盯屏幕，**听声辨势，快人一步**。
 
@@ -106,6 +106,10 @@ node .\scripts\diagnostic-log-server.js
 ---
 
 ## 📋 更新日志
+
+### 2026.9.13
+- **v1.20.1** — 修复备注+专属铃叠播：绑了专属音的账号只响铃，不再同时念备注
+- **v1.20.0** — 更名为「技术瓜盯盘伴侣」；支持 Debot 推特播报，并可单独开关 GMGN / Debot 避免叠音
 
 ### 2026.9.7
 - **v1.19.0** — 推特语音开关改成「谁出声 / 怎么播」，文案面向小白，三个开关互不影响
@@ -211,6 +215,20 @@ The offscreen permission is used solely to play local alert sounds and TTS for T
 
 ## 📝 详细商店发布文案 (Store Changelog)
 *(打包脚本 pack.py 会自动提取此段落并打印，方便直接复制到谷歌商店)*
+
+**v1.20.1**
+🔔 **修复备注名与专属铃叠播**
+- 同一账号既写了备注、又绑了专属铃时，只播放专属铃，不再同时念「备注 发推啦」
+- 专属铃优先于 AI 念名；自定义铃声文件丢失时也不会再降级去念备注
+- 推特 ID 统一去掉 @ 再匹配，避免 GMGN / Debot 把同一个号认成两个人而叠音
+
+**v1.20.0**
+🍉 **更名为技术瓜盯盘伴侣 + Debot 推特语音**
+- 插件从「GMGN 盯盘伴侣」更名为「技术瓜盯盘伴侣」，同时支持 GMGN 与 Debot
+- 打开并登录 Debot 后，可播报社媒监控里「我的」盯盘账号
+- 发推、回复、转发、引用、关注、改资料、删帖都会出声，沿用现有专属铃和 AI 念名
+- 系统设置可分别开关 GMGN / Debot：两个都开两边都会出声，只开一个可避免两个页面叠音
+- 同一条推的译文不会重复播；精选热门和币安广场默认不播
 
 **v1.19.0**
 🔊 **推特语音开关更好懂**

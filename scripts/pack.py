@@ -44,6 +44,7 @@ def create_zip():
         "background.js",
         "content.js",
         "inject.js",
+        "inject-debot.js",
         "offscreen.html",
         "offscreen.js",
         "update.html",

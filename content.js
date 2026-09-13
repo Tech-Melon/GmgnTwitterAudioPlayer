@@ -2,6 +2,8 @@ let configCache = {
     isMasterEnabled: true,
     enableTwitter: true,
     enableWallet: true,
+    enableGmgn: true,
+    enableDebot: true,
     playDefaultUnmapped: true,
     playMappedGeneric: true,
     enableTTS: true,
@@ -83,7 +85,7 @@ function showContextInvalidBanner() {
     try {
         const banner = document.createElement('div');
         banner.id = 'gmgn-audio-context-invalid-banner';
-        banner.textContent = 'GMGN 盯盘伴侣：扩展已更新或失效，请刷新本页以恢复播报';
+        banner.textContent = '技术瓜盯盘伴侣：扩展已更新或失效，请刷新本页以恢复播报';
         banner.style.cssText = [
             'position:fixed',
             'top:12px',
@@ -150,7 +152,7 @@ function showWssDownBanner() {
     try {
         const banner = document.createElement('div');
         banner.id = 'gmgn-audio-wss-down-banner';
-        banner.textContent = 'GMGN 盯盘伴侣：行情推送连接已中断，点击刷新恢复播报';
+        banner.textContent = '技术瓜盯盘伴侣：行情推送连接已中断，点击刷新恢复播报';
         banner.style.cssText = [
             'position:fixed',
             'top:12px',
@@ -284,8 +286,26 @@ function applyProcessorRole(isProcessor, epoch) {
     }
 }
 
+function getPagePlatform() {
+    try {
+        const host = String(location.hostname || '').toLowerCase();
+        if (host === 'gmgn.ai' || host.endsWith('.gmgn.ai')) return 'gmgn';
+        if (host === 'debot.ai' || host.endsWith('.debot.ai')) return 'debot';
+    } catch (error) {
+        /* ignore */
+    }
+    return '';
+}
+
+function isCurrentPlatformEnabled() {
+    const platform = getPagePlatform();
+    if (platform === 'gmgn') return configCache.enableGmgn !== false;
+    if (platform === 'debot') return configCache.enableDebot !== false;
+    return false;
+}
+
 function canSubmitMonitorEvents() {
-    return isLocalProcessor && hasLiveExtensionContext();
+    return isLocalProcessor && hasLiveExtensionContext() && isCurrentPlatformEnabled();
 }
 
 /**
@@ -996,7 +1016,7 @@ if (!OFFSCREEN_AUDIO_ONLY) {
         if (_autoplayUnlocked) return;
         const banner = document.createElement('div');
         banner.id = 'gmgn-audio-unlock-banner';
-        banner.textContent = '🔊 点击页面任意位置，解锁 GMGN 盯盘伴侣音频播报';
+        banner.textContent = '🔊 点击页面任意位置，解锁技术瓜盯盘伴侣音频播报';
         banner.style.cssText = `
             position: fixed; top: 0; left: 0; right: 0; z-index: 999999;
             background: linear-gradient(135deg, #ff9500, #ff6b00);
@@ -1022,6 +1042,8 @@ if (!OFFSCREEN_AUDIO_ONLY) {
         configCache.isMasterEnabled = result.isMasterEnabled !== false;
         configCache.enableTwitter = result.enableTwitter !== false;
         configCache.enableWallet = result.enableWallet !== false;
+        configCache.enableGmgn = result.enableGmgn !== false;
+        configCache.enableDebot = result.enableDebot !== false;
         configCache.globalVolume = result.globalVolume !== undefined ? result.globalVolume : 1.0;
         configCache.twitterVolume = result.twitterVolume !== undefined ? result.twitterVolume : (configCache.globalVolume || 1.0);
         configCache.walletVolume = result.walletVolume !== undefined ? result.walletVolume : (configCache.globalVolume || 1.0);
@@ -1083,9 +1105,11 @@ function syncChannelToggles() {
     const master = configCache.isMasterEnabled !== false;
     const twitter = configCache.enableTwitter !== false;
     const wallet = configCache.enableWallet !== false;
+    const gmgn = configCache.enableGmgn !== false;
+    const debot = configCache.enableDebot !== false;
     window.dispatchEvent(new CustomEvent('GMGN_AUDIO_TOGGLE', { detail: { enabled: master } }));
     window.dispatchEvent(new CustomEvent('GMGN_CHANNEL_TOGGLE', {
-        detail: { master, twitter, wallet }
+        detail: { master, twitter, wallet, gmgn, debot }
     }));
     syncInjectFilters();
 }
@@ -1113,6 +1137,8 @@ function syncInjectFilters() {
             master: configCache.isMasterEnabled !== false,
             twitter: configCache.enableTwitter !== false,
             wallet: configCache.enableWallet !== false,
+            gmgn: configCache.enableGmgn !== false,
+            debot: configCache.enableDebot !== false,
             walletChains,
             blockedTokens,
             walletAddrs
@@ -1331,7 +1357,10 @@ AudioPool.init();
 //    - TtsChannel：AI 念名 / 默认 ding / 钱包播报，同通道最新打断
 //    两通道可叠播，互不 interrupt
 // ════════════════════════════════════════════════════════════
-const GENERIC_SOUND_IDS = ['default.MP3', 'preset1.MP3'];
+const TwitterPlayPriority = globalThis.GmgnTwitterPlayPriority;
+const GENERIC_SOUND_IDS = (TwitterPlayPriority && TwitterPlayPriority.GENERIC_SOUND_IDS)
+    ? TwitterPlayPriority.GENERIC_SOUND_IDS
+    : ['default.MP3', 'preset1.MP3'];
 
 let exclusiveActivePlayer = null;
 let ttsActivePlayer = null;
@@ -1389,21 +1418,58 @@ function setChannelActivePlayer(channel, player) {
 }
 
 function isGenericSoundId(audioId) {
+    if (TwitterPlayPriority) return TwitterPlayPriority.isGenericSoundId(audioId);
     return !!audioId && GENERIC_SOUND_IDS.includes(audioId);
+}
+
+function classifyTwitterPlay(trigger) {
+    if (TwitterPlayPriority) {
+        return TwitterPlayPriority.classifyTwitterTrigger(trigger, {
+            mappings: configCache.mappings || {},
+            customAudios: configCache.customAudios || {},
+            playMappedGeneric: configCache.playMappedGeneric,
+            playDefaultUnmapped: configCache.playDefaultUnmapped
+        });
+    }
+    const twitterId = (trigger && trigger.id ? String(trigger.id) : '').trim().toLowerCase();
+    const rule = (configCache.mappings || {})[twitterId] || null;
+    const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
+    const playExclusive = !!(mappedAudioId && !isGenericSoundId(mappedAudioId));
+    const playTts = playExclusive
+        ? false
+        : (mappedAudioId ? configCache.playMappedGeneric !== false : configCache.playDefaultUnmapped !== false);
+    return {
+        playExclusive,
+        playTts,
+        mappedAudioId: mappedAudioId || '',
+        speakerName: getTwitterSpeakerName(trigger, rule),
+        twitterId,
+        rule
+    };
 }
 
 /** 解析专属铃声 src；通用音 / 丢失自定义 / 无绑定 → null */
 function resolveExclusiveAudioSrc(mappedAudioId) {
+    if (TwitterPlayPriority) {
+        return TwitterPlayPriority.resolveExclusiveAudioSrc(
+            mappedAudioId,
+            configCache.customAudios || {},
+            (audioId) => chrome.runtime.getURL(`sounds/${audioId}`)
+        );
+    }
     if (!mappedAudioId || isGenericSoundId(mappedAudioId)) return null;
     if (configCache.customAudios && configCache.customAudios[mappedAudioId]) {
         const customObj = configCache.customAudios[mappedAudioId];
         return typeof customObj === 'string' ? customObj : customObj.data;
     }
-    if (String(mappedAudioId).startsWith('custom_')) return null; // 文件丢失 → 走 TTS
+    if (String(mappedAudioId).startsWith('custom_')) return null;
     return chrome.runtime.getURL(`sounds/${mappedAudioId}`);
 }
 
 function getTwitterSpeakerName(trigger, rule) {
+    if (TwitterPlayPriority) {
+        return TwitterPlayPriority.getTwitterSpeakerName(trigger, rule);
+    }
     const twitterId = (trigger && trigger.id ? String(trigger.id) : '').trim().toLowerCase();
     const displayName = (trigger && trigger.name) ? trigger.name : twitterId;
     if (typeof rule === 'object' && rule !== null && rule.remark) return rule.remark;
@@ -1434,10 +1500,9 @@ function fireTwitterExclusiveIfAny(triggers, onComplete = null) {
         if (!trigger || typeof trigger.id !== 'string') return;
         if (!isTwitterEventAllowed(trigger)) return;
 
-        const twitterId = trigger.id.trim().toLowerCase();
-        const rule = configCache.mappings[twitterId];
-        const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
-        const src = resolveExclusiveAudioSrc(mappedAudioId);
+        const decision = classifyTwitterPlay(trigger);
+        if (!decision.playExclusive) return;
+        const src = resolveExclusiveAudioSrc(decision.mappedAudioId);
         if (!src) return;
 
         latestSrc = src;
@@ -1449,25 +1514,13 @@ function fireTwitterExclusiveIfAny(triggers, onComplete = null) {
     return true;
 }
 
-/** 筛出需要走 TTS 通道的 triggers（排除已绑定专属铃的账号） */
+/** 筛出需要走 TTS 通道的 triggers（绑了专属铃的账号一律排除，含备注） */
 function filterTwitterTtsTriggers(triggers) {
     if (!Array.isArray(triggers)) return [];
     return triggers.filter(trigger => {
         if (!trigger || typeof trigger.id !== 'string') return false;
         if (!isTwitterEventAllowed(trigger)) return false;
-
-        const twitterId = trigger.id.trim().toLowerCase();
-        const rule = configCache.mappings[twitterId];
-        const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
-
-        if (mappedAudioId) {
-            // 专属铃账号不进 TTS 通道
-            if (resolveExclusiveAudioSrc(mappedAudioId)) return false;
-            // 已配置规则但无专属音（备注/通用音）→ 受 playMappedGeneric 开关控制
-            return configCache.playMappedGeneric !== false;
-        }
-        // 未配置规则
-        return configCache.playDefaultUnmapped !== false;
+        return classifyTwitterPlay(trigger).playTts === true;
     });
 }
 
@@ -1545,12 +1598,9 @@ function _extractTwitterNames(triggers) {
     const counts = new Map();
     triggers.forEach(t => {
         if (!t || typeof t.id !== 'string') return;
-        const twitterId = t.id.trim().toLowerCase();
-        const rule = configCache.mappings ? configCache.mappings[twitterId] : null;
-        let name = t.name || twitterId;
-        if (typeof rule === 'object' && rule !== null && rule.remark) {
-            name = rule.remark;
-        }
+        const decision = classifyTwitterPlay(t);
+        if (decision.playTts !== true) return;
+        const name = decision.speakerName || t.name || decision.twitterId;
         counts.set(name, (counts.get(name) || 0) + 1);
     });
     return Array.from(counts.entries())
@@ -2510,13 +2560,15 @@ document.addEventListener('visibilitychange', () => {
             TabLeader.init();
         }
         try {
-            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => {
+            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'enableGmgn', 'enableDebot', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => {
                 if (chrome.runtime.lastError) return;
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
             configCache.defaultAudio = result.defaultAudio || 'sounds/default.MP3';
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled !== false;
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter !== false;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet !== false;
+            if (result.enableGmgn !== undefined) configCache.enableGmgn = result.enableGmgn !== false;
+            if (result.enableDebot !== undefined) configCache.enableDebot = result.enableDebot !== false;
             if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
             if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
             if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
@@ -2604,7 +2656,7 @@ function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => { // 🌟 数组加了高级定制选项+旧版字段用于迁移
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'enableGmgn', 'enableDebot', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => { // 🌟 数组加了高级定制选项+旧版字段用于迁移
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (!configCache.defaultAudio) configCache.defaultAudio = 'sounds/default.MP3';
@@ -2612,6 +2664,8 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled !== false;
     if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter !== false;
     if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet !== false;
+    if (result.enableGmgn !== undefined) configCache.enableGmgn = result.enableGmgn !== false;
+    if (result.enableDebot !== undefined) configCache.enableDebot = result.enableDebot !== false;
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
     if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
     if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
@@ -2781,6 +2835,14 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             configCache.enableWallet = changes.enableWallet.newValue !== false;
             channelToggleChanged = true;
             debugLog('🎚️ [GMGN 盯盘伴侣] enableWallet →', configCache.enableWallet);
+        }
+        if ('enableGmgn' in changes) {
+            configCache.enableGmgn = changes.enableGmgn.newValue !== false;
+            channelToggleChanged = true;
+        }
+        if ('enableDebot' in changes) {
+            configCache.enableDebot = changes.enableDebot.newValue !== false;
+            channelToggleChanged = true;
         }
         if ('debugLoggingEnabled' in changes) {
             configCache.debugLoggingEnabled = changes.debugLoggingEnabled.newValue === true;
@@ -3264,13 +3326,11 @@ function playTwitterDirectly(triggers, fingerprints) {
         if (!trigger || typeof trigger.id !== 'string') return;
         if (!isTwitterEventAllowed(trigger)) return;
 
-        const twitterId = trigger.id.trim().toLowerCase();
-        const rule = configCache.mappings[twitterId];
-        const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
-        // 双保险：专属铃账号不应进入此函数，若误入则跳过（铃已旁路播放）
-        if (resolveExclusiveAudioSrc(mappedAudioId)) return;
+        const decision = classifyTwitterPlay(trigger);
+        // 双保险：绑了专属铃（含备注+专属）绝不念名，铃已在旁路播放
+        if (decision.playExclusive || decision.playTts !== true) return;
 
-        const speakerName = getTwitterSpeakerName(trigger, rule);
+        const speakerName = decision.speakerName;
 
         if (configCache.enableTTS !== false) {
             ttsNameCounts.set(speakerName, (ttsNameCounts.get(speakerName) || 0) + 1);
@@ -3332,7 +3392,9 @@ function handleTwitterMsg(e) {
         const eventId = detail.eventId || `twitter_fallback_${hashMonitorPayload(triggers)}`;
         const semanticKey = detail.semanticKey || `twitter_semantic_${hashMonitorPayload(
             triggers.map((trigger) => ({
-                id: String(trigger && trigger.id || '').trim().toLowerCase(),
+                id: TwitterPlayPriority
+                    ? TwitterPlayPriority.normalizeTwitterId(trigger && trigger.id)
+                    : String(trigger && trigger.id || '').trim().replace(/^@+/, '').toLowerCase(),
                 tw: String(trigger && trigger.tw || 'unknown').toLowerCase()
             })).sort((left, right) => `${left.id}:${left.tw}`.localeCompare(`${right.id}:${right.tw}`))
         )}`;

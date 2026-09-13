@@ -176,6 +176,8 @@ document.addEventListener('DOMContentLoaded', () => {
         masterToggle: document.getElementById('masterToggle'),
         enableTwitterToggle: document.getElementById('enableTwitterToggle'),
         enableWalletToggle: document.getElementById('enableWalletToggle'),
+        enableGmgnToggle: document.getElementById('enableGmgnToggle'),
+        enableDebotToggle: document.getElementById('enableDebotToggle'),
         debugLoggingToggle: document.getElementById('debugLoggingToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 名单外账号提醒
         enableTTSToggle: document.getElementById('enableTTSToggle'), // AI 念名
@@ -621,6 +623,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function loadData() {
         chrome.storage.local.get([
             'twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'enableTwitter', 'enableWallet',
+            'enableGmgn', 'enableDebot',
             'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped',
             'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts',
             'walletFilters', 'walletDictionary', 'blockedWsChannels', 'updateNotice',
@@ -635,6 +638,8 @@ document.addEventListener('DOMContentLoaded', () => {
             els.masterToggle.checked = result.isMasterEnabled !== false;
             els.enableTwitterToggle.checked = result.enableTwitter !== false;
             els.enableWalletToggle.checked = result.enableWallet !== false;
+            if (els.enableGmgnToggle) els.enableGmgnToggle.checked = result.enableGmgn !== false;
+            if (els.enableDebotToggle) els.enableDebotToggle.checked = result.enableDebot !== false;
             if (els.debugLoggingToggle) {
                 els.debugLoggingToggle.checked = false;
                 if (result.debugLoggingEnabled === true) {
@@ -1211,7 +1216,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const currentMappings = result.twitterAudioMappings || {};
                         let addedCount = 0, dupCount = 0;
                         for (const [key, val] of Object.entries(importedMappings)) {
-                            const cleanKey = key.trim().toLowerCase();
+                            const cleanKey = key.trim().toLowerCase().replace(/^@+/, '');
                             if (!cleanKey) continue;
                             if (currentMappings[cleanKey]) dupCount++;
                             else { currentMappings[cleanKey] = val; addedCount++; }
@@ -1283,6 +1288,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const saved = res[key] === true;
                 if (key === 'enableTwitter' && els.enableTwitterToggle) els.enableTwitterToggle.checked = saved;
                 if (key === 'enableWallet' && els.enableWalletToggle) els.enableWalletToggle.checked = saved;
+                if (key === 'enableGmgn' && els.enableGmgnToggle) els.enableGmgnToggle.checked = saved;
+                if (key === 'enableDebot' && els.enableDebotToggle) els.enableDebotToggle.checked = saved;
                 if (key === 'isMasterEnabled' && els.masterToggle) els.masterToggle.checked = saved;
                 if (key === 'debugLoggingEnabled' && els.debugLoggingToggle) els.debugLoggingToggle.checked = saved;
                 if (typeof onToast === 'function') onToast(saved);
@@ -1305,6 +1312,20 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(on ? '钱包监控已开启' : '钱包监控已关闭');
         });
     });
+    if (els.enableGmgnToggle) {
+        els.enableGmgnToggle.addEventListener('change', (e) => {
+            persistBoolToggle('enableGmgn', e.target.checked, (on) => {
+                showToast(on ? '已开启：GMGN 页面播报' : '已关闭：GMGN 页面静音');
+            });
+        });
+    }
+    if (els.enableDebotToggle) {
+        els.enableDebotToggle.addEventListener('change', (e) => {
+            persistBoolToggle('enableDebot', e.target.checked, (on) => {
+                showToast(on ? '已开启：Debot 页面播报' : '已关闭：Debot 页面静音');
+            });
+        });
+    }
     if (els.debugLoggingToggle) {
         els.debugLoggingToggle.addEventListener('change', async (e) => {
             const enabled = e.target.checked === true;
