@@ -449,3 +449,68 @@ test('silent heartbeat does not steal a fresh processor', async () => {
     assert.equal(heartbeat.isProcessor, false);
     assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor.tabId, 201);
 });
+
+test('ineligible tab cannot steal processor even with preferProcessor', async () => {
+    const harness = createBackgroundHarness();
+    const gmgnSender = { tab: { id: 301 }, documentId: 'doc-301' };
+    const debotSender = { tab: { id: 302 }, documentId: 'doc-302' };
+
+    harness.setTabsSendHandler((_tabId, message, callback) => {
+        if (message.type === 'GMGN_PROCESSOR_PING' || message.type === 'GMGN_PROCESSOR_ROLE') {
+            callback({ ok: true });
+            return;
+        }
+        callback({ ok: true, disposition: 'complete', runtimeState: {} });
+    });
+
+    const first = await harness.dispatch({
+        type: 'GMGN_REGISTER_MONITOR',
+        visible: false,
+        preferProcessor: false,
+        processorEligible: true
+    }, gmgnSender);
+    const second = await harness.dispatch({
+        type: 'GMGN_REGISTER_MONITOR',
+        visible: true,
+        preferProcessor: true,
+        processorEligible: false
+    }, debotSender);
+
+    assert.equal(first.ok, true);
+    assert.equal(first.isProcessor, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.isProcessor, false);
+    assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor.tabId, 301);
+});
+
+test('current processor yields when it becomes ineligible', async () => {
+    const harness = createBackgroundHarness();
+    const sender = { tab: { id: 401 }, documentId: 'doc-401' };
+
+    harness.setTabsSendHandler((_tabId, message, callback) => {
+        if (message.type === 'GMGN_PROCESSOR_PING' || message.type === 'GMGN_PROCESSOR_ROLE') {
+            callback({ ok: true });
+            return;
+        }
+        callback({ ok: true, disposition: 'complete', runtimeState: {} });
+    });
+
+    const first = await harness.dispatch({
+        type: 'GMGN_REGISTER_MONITOR',
+        visible: true,
+        preferProcessor: true,
+        processorEligible: true
+    }, sender);
+    const yielded = await harness.dispatch({
+        type: 'GMGN_MONITOR_HEARTBEAT',
+        visible: true,
+        preferProcessor: false,
+        processorEligible: false
+    }, sender);
+
+    assert.equal(first.ok, true);
+    assert.equal(first.isProcessor, true);
+    assert.equal(yielded.ok, true);
+    assert.equal(yielded.isProcessor, false);
+    assert.equal(harness.sessionState.gmgnEventCoordinatorState.processor, null);
+});

@@ -50,7 +50,21 @@ test('remark + exclusive audio never enters TTS', () => {
     assert.equal(decision.speakerName, '马斯克');
 });
 
-test('remark + custom exclusive never enters TTS even if file is missing', () => {
+test('remark + custom exclusive never enters TTS when the file exists', () => {
+    const decision = classifyTwitterTrigger(
+        { id: 'binancezh', name: 'Binance' },
+        {
+            mappings: { binancezh: customRule },
+            customAudios: { custom_abc: 'data:audio/mpeg;base64,AAA' },
+            playMappedGeneric: true
+        }
+    );
+    assert.equal(decision.playExclusive, true);
+    assert.equal(decision.playTts, false);
+    assert.equal(decision.speakerName, '币安官推');
+});
+
+test('remark + missing exclusive file falls back to speaking the remark', () => {
     const decision = classifyTwitterTrigger(
         { id: 'binancezh', name: 'Binance' },
         {
@@ -59,8 +73,8 @@ test('remark + custom exclusive never enters TTS even if file is missing', () =>
             playMappedGeneric: true
         }
     );
-    assert.equal(decision.playExclusive, true);
-    assert.equal(decision.playTts, false);
+    assert.equal(decision.playExclusive, false);
+    assert.equal(decision.playTts, true);
     assert.equal(decision.speakerName, '币安官推');
     assert.equal(resolveExclusiveAudioSrc('custom_abc', {}), null);
 });

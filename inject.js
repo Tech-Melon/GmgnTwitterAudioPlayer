@@ -194,7 +194,7 @@
             twitter: d.twitter !== false,
             wallet: d.wallet !== false,
             gmgn: d.gmgn !== false,
-            debot: d.debot !== false,
+            debot: d.debot === true,
             walletChains: nextChains && nextChains.size > 0 ? nextChains : null,
             blockedTokens: nextBlocked,
             walletAddrs: nextAddrs && nextAddrs.size > 0 ? nextAddrs : null

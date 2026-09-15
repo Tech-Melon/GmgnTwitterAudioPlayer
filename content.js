@@ -3,7 +3,7 @@ let configCache = {
     enableTwitter: true,
     enableWallet: true,
     enableGmgn: true,
-    enableDebot: true,
+    enableDebot: false,
     playDefaultUnmapped: true,
     playMappedGeneric: true,
     enableTTS: true,
@@ -297,10 +297,18 @@ function getPagePlatform() {
     return '';
 }
 
+function applyPlatformFlags(enableGmgn, enableDebot) {
+    configCache.enableGmgn = enableGmgn !== false;
+    configCache.enableDebot = enableDebot === true;
+    if (configCache.enableGmgn && configCache.enableDebot) {
+        configCache.enableDebot = false;
+    }
+}
+
 function isCurrentPlatformEnabled() {
     const platform = getPagePlatform();
     if (platform === 'gmgn') return configCache.enableGmgn !== false;
-    if (platform === 'debot') return configCache.enableDebot !== false;
+    if (platform === 'debot') return configCache.enableDebot === true;
     return false;
 }
 
@@ -318,10 +326,12 @@ function registerWithCoordinator(options = {}) {
             resolve(null);
             return;
         }
+        const eligible = isCurrentPlatformEnabled();
         const payload = {
             type: options.heartbeat ? 'GMGN_MONITOR_HEARTBEAT' : 'GMGN_REGISTER_MONITOR',
-            preferProcessor: options.preferProcessor === true,
-            visible: options.visible === undefined ? isPageVisibleNow() : options.visible === true
+            preferProcessor: options.preferProcessor === true && eligible,
+            visible: options.visible === undefined ? isPageVisibleNow() : options.visible === true,
+            processorEligible: eligible
         };
         try {
             chrome.runtime.sendMessage(payload, (response) => {
@@ -1042,8 +1052,7 @@ if (!OFFSCREEN_AUDIO_ONLY) {
         configCache.isMasterEnabled = result.isMasterEnabled !== false;
         configCache.enableTwitter = result.enableTwitter !== false;
         configCache.enableWallet = result.enableWallet !== false;
-        configCache.enableGmgn = result.enableGmgn !== false;
-        configCache.enableDebot = result.enableDebot !== false;
+        applyPlatformFlags(result.enableGmgn, result.enableDebot);
         configCache.globalVolume = result.globalVolume !== undefined ? result.globalVolume : 1.0;
         configCache.twitterVolume = result.twitterVolume !== undefined ? result.twitterVolume : (configCache.globalVolume || 1.0);
         configCache.walletVolume = result.walletVolume !== undefined ? result.walletVolume : (configCache.globalVolume || 1.0);
@@ -1106,7 +1115,7 @@ function syncChannelToggles() {
     const twitter = configCache.enableTwitter !== false;
     const wallet = configCache.enableWallet !== false;
     const gmgn = configCache.enableGmgn !== false;
-    const debot = configCache.enableDebot !== false;
+    const debot = configCache.enableDebot === true;
     window.dispatchEvent(new CustomEvent('GMGN_AUDIO_TOGGLE', { detail: { enabled: master } }));
     window.dispatchEvent(new CustomEvent('GMGN_CHANNEL_TOGGLE', {
         detail: { master, twitter, wallet, gmgn, debot }
@@ -1138,7 +1147,7 @@ function syncInjectFilters() {
             twitter: configCache.enableTwitter !== false,
             wallet: configCache.enableWallet !== false,
             gmgn: configCache.enableGmgn !== false,
-            debot: configCache.enableDebot !== false,
+            debot: configCache.enableDebot === true,
             walletChains,
             blockedTokens,
             walletAddrs
@@ -1428,13 +1437,14 @@ function classifyTwitterPlay(trigger) {
             mappings: configCache.mappings || {},
             customAudios: configCache.customAudios || {},
             playMappedGeneric: configCache.playMappedGeneric,
-            playDefaultUnmapped: configCache.playDefaultUnmapped
+            playDefaultUnmapped: configCache.playDefaultUnmapped,
+            resolveBuiltinSrc: (audioId) => chrome.runtime.getURL(`sounds/${audioId}`)
         });
     }
     const twitterId = (trigger && trigger.id ? String(trigger.id) : '').trim().toLowerCase();
     const rule = (configCache.mappings || {})[twitterId] || null;
     const mappedAudioId = (typeof rule === 'object' && rule !== null) ? rule.id : rule;
-    const playExclusive = !!(mappedAudioId && !isGenericSoundId(mappedAudioId));
+    const playExclusive = !!resolveExclusiveAudioSrc(mappedAudioId);
     const playTts = playExclusive
         ? false
         : (mappedAudioId ? configCache.playMappedGeneric !== false : configCache.playDefaultUnmapped !== false);
@@ -1514,7 +1524,7 @@ function fireTwitterExclusiveIfAny(triggers, onComplete = null) {
     return true;
 }
 
-/** 筛出需要走 TTS 通道的 triggers（绑了专属铃的账号一律排除，含备注） */
+/** 筛出需要走 TTS 通道的 triggers（专属铃能响的账号排除；没铃则念备注） */
 function filterTwitterTtsTriggers(triggers) {
     if (!Array.isArray(triggers)) return [];
     return triggers.filter(trigger => {
@@ -2567,8 +2577,12 @@ document.addEventListener('visibilitychange', () => {
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled !== false;
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter !== false;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet !== false;
-            if (result.enableGmgn !== undefined) configCache.enableGmgn = result.enableGmgn !== false;
-            if (result.enableDebot !== undefined) configCache.enableDebot = result.enableDebot !== false;
+            if (result.enableGmgn !== undefined || result.enableDebot !== undefined) {
+                applyPlatformFlags(
+                    result.enableGmgn !== undefined ? result.enableGmgn : configCache.enableGmgn,
+                    result.enableDebot !== undefined ? result.enableDebot : configCache.enableDebot
+                );
+            }
             if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
             if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
             if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
@@ -2664,8 +2678,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled !== false;
     if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter !== false;
     if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet !== false;
-    if (result.enableGmgn !== undefined) configCache.enableGmgn = result.enableGmgn !== false;
-    if (result.enableDebot !== undefined) configCache.enableDebot = result.enableDebot !== false;
+    applyPlatformFlags(result.enableGmgn, result.enableDebot);
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
     if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
     if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
@@ -2836,13 +2849,18 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             channelToggleChanged = true;
             debugLog('🎚️ [GMGN 盯盘伴侣] enableWallet →', configCache.enableWallet);
         }
-        if ('enableGmgn' in changes) {
-            configCache.enableGmgn = changes.enableGmgn.newValue !== false;
+        if ('enableGmgn' in changes || 'enableDebot' in changes) {
+            applyPlatformFlags(
+                'enableGmgn' in changes ? changes.enableGmgn.newValue : configCache.enableGmgn,
+                'enableDebot' in changes ? changes.enableDebot.newValue : configCache.enableDebot
+            );
             channelToggleChanged = true;
-        }
-        if ('enableDebot' in changes) {
-            configCache.enableDebot = changes.enableDebot.newValue !== false;
-            channelToggleChanged = true;
+            const enabled = isCurrentPlatformEnabled();
+            registerWithCoordinator({
+                preferProcessor: enabled && isPageVisibleNow(),
+                visible: isPageVisibleNow(),
+                heartbeat: !(enabled && isPageVisibleNow())
+            });
         }
         if ('debugLoggingEnabled' in changes) {
             configCache.debugLoggingEnabled = changes.debugLoggingEnabled.newValue === true;
@@ -3327,7 +3345,7 @@ function playTwitterDirectly(triggers, fingerprints) {
         if (!isTwitterEventAllowed(trigger)) return;
 
         const decision = classifyTwitterPlay(trigger);
-        // 双保险：绑了专属铃（含备注+专属）绝不念名，铃已在旁路播放
+        // 双保险：专属铃能响的账号绝不念名；没铃才走 TTS
         if (decision.playExclusive || decision.playTts !== true) return;
 
         const speakerName = decision.speakerName;

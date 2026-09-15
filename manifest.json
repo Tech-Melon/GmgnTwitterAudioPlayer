@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "技术瓜盯盘伴侣",
-    "version": "1.20.1",
+    "version": "1.20.2",
     "description": "给 GMGN、Debot 用的推特/钱包实时语音播报（X: 0xTechMelon）",
     "icons": {
         "16": "images/icon16.png",

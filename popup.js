@@ -638,8 +638,14 @@ document.addEventListener('DOMContentLoaded', () => {
             els.masterToggle.checked = result.isMasterEnabled !== false;
             els.enableTwitterToggle.checked = result.enableTwitter !== false;
             els.enableWalletToggle.checked = result.enableWallet !== false;
-            if (els.enableGmgnToggle) els.enableGmgnToggle.checked = result.enableGmgn !== false;
-            if (els.enableDebotToggle) els.enableDebotToggle.checked = result.enableDebot !== false;
+            let gmgnOn = result.enableGmgn !== false;
+            let debotOn = result.enableDebot === true;
+            if (gmgnOn && debotOn) {
+                debotOn = false;
+                chrome.storage.local.set({ enableDebot: false });
+            }
+            if (els.enableGmgnToggle) els.enableGmgnToggle.checked = gmgnOn;
+            if (els.enableDebotToggle) els.enableDebotToggle.checked = debotOn;
             if (els.debugLoggingToggle) {
                 els.debugLoggingToggle.checked = false;
                 if (result.debugLoggingEnabled === true) {
@@ -1312,18 +1318,38 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(on ? '钱包监控已开启' : '钱包监控已关闭');
         });
     });
+    const persistPlatformToggles = (enableGmgn, enableDebot, toastText) => {
+        const gmgnOn = enableGmgn === true;
+        const debotOn = enableDebot === true;
+        if (els.enableGmgnToggle) els.enableGmgnToggle.checked = gmgnOn;
+        if (els.enableDebotToggle) els.enableDebotToggle.checked = debotOn;
+        chrome.storage.local.set({ enableGmgn: gmgnOn, enableDebot: debotOn }, () => {
+            if (chrome.runtime.lastError) {
+                showToast('设置保存失败，请重试');
+                console.warn('[GMGN popup] storage set failed', 'platform', chrome.runtime.lastError);
+                return;
+            }
+            showToast(toastText);
+        });
+    };
     if (els.enableGmgnToggle) {
         els.enableGmgnToggle.addEventListener('change', (e) => {
-            persistBoolToggle('enableGmgn', e.target.checked, (on) => {
-                showToast(on ? '已开启：GMGN 页面播报' : '已关闭：GMGN 页面静音');
-            });
+            const on = e.target.checked === true;
+            if (on) {
+                persistPlatformToggles(true, false, '已开启：仅 GMGN 出声');
+                return;
+            }
+            persistPlatformToggles(false, els.enableDebotToggle && els.enableDebotToggle.checked === true, '已关闭：GMGN 页面静音');
         });
     }
     if (els.enableDebotToggle) {
         els.enableDebotToggle.addEventListener('change', (e) => {
-            persistBoolToggle('enableDebot', e.target.checked, (on) => {
-                showToast(on ? '已开启：Debot 页面播报' : '已关闭：Debot 页面静音');
-            });
+            const on = e.target.checked === true;
+            if (on) {
+                persistPlatformToggles(false, true, '已开启：仅 Debot 出声（GMGN 已关）');
+                return;
+            }
+            persistPlatformToggles(els.enableGmgnToggle && els.enableGmgnToggle.checked === true, false, '已关闭：Debot 页面静音');
         });
     }
     if (els.debugLoggingToggle) {

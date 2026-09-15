@@ -12,7 +12,7 @@
 
     window.__GMGN_AUDIO_ENABLED = window.__GMGN_AUDIO_ENABLED !== false;
     window.__GMGN_ENABLE_TWITTER = window.__GMGN_ENABLE_TWITTER !== false;
-    window.__GMGN_ENABLE_DEBOT = window.__GMGN_ENABLE_DEBOT !== false;
+    window.__GMGN_ENABLE_DEBOT = window.__GMGN_ENABLE_DEBOT === true;
     window.__GMGN_FILTER = window.__GMGN_FILTER || {
         ready: false,
         roleKnown: false,
@@ -51,7 +51,7 @@
             twitter: d.twitter !== false,
             wallet: prev.wallet !== false,
             gmgn: d.gmgn !== false,
-            debot: d.debot !== false,
+            debot: d.debot === true,
             walletChains: prev.walletChains || null,
             blockedTokens: prev.blockedTokens || new Set(),
             walletAddrs: prev.walletAddrs || null
@@ -65,7 +65,7 @@
         if (window.__DEBOT_AUDIO_INJECT_GENERATION !== injectionGeneration) return false;
         if (!window.__GMGN_AUDIO_ENABLED) return false;
         if (window.__GMGN_ENABLE_TWITTER === false) return false;
-        if (window.__GMGN_ENABLE_DEBOT === false) return false;
+        if (window.__GMGN_ENABLE_DEBOT !== true) return false;
         const filter = window.__GMGN_FILTER;
         if (filter
             && filter.ready === true

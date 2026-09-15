@@ -264,22 +264,29 @@ function isMonitorStale(record, now = Date.now()) {
 function registerMonitor(sender, options = {}) {
     const record = buildMonitorRecord(sender, options);
     if (!record) return null;
+    record.processorEligible = options.processorEligible !== false;
     monitorTabs.set(record.tabId, record);
 
     const previous = eventCoordinator.processor;
-    const preferProcessor = options.preferProcessor === true && record.visible;
+    if (previous && previous.tabId === record.tabId && record.processorEligible === false) {
+        eventCoordinator.clearProcessor(record.tabId, record.documentId);
+    }
+
+    const current = eventCoordinator.processor;
+    const preferProcessor = options.preferProcessor === true && record.visible && record.processorEligible !== false;
     let shouldAssign = false;
 
-    if (!previous) {
-        shouldAssign = true;
-    } else if (previous.tabId === record.tabId) {
+    if (!current) {
+        shouldAssign = record.processorEligible !== false;
+    } else if (current.tabId === record.tabId) {
         // 同 Tab 刷新 documentId / epoch 粘性
-        shouldAssign = true;
+        shouldAssign = record.processorEligible !== false;
     } else if (preferProcessor) {
         shouldAssign = true;
-    } else if (isMonitorStale(monitorTabs.get(previous.tabId))) {
-        // 旧 Processor 失联：优先让仍活着的 Tab（尤其前台）接手
-        shouldAssign = record.visible || options.allowStaleTakeover !== false;
+    } else if (isMonitorStale(monitorTabs.get(current.tabId))) {
+        // 旧 Processor 失联：优先让仍活着且可播报的 Tab 接手
+        shouldAssign = record.processorEligible !== false
+            && (record.visible || options.allowStaleTakeover !== false);
     }
 
     if (shouldAssign) {
@@ -287,11 +294,12 @@ function registerMonitor(sender, options = {}) {
     }
 
     const processor = eventCoordinator.processor;
-    const processorChanged = !previous
-        || !processor
-        || previous.tabId !== processor.tabId
-        || previous.documentId !== processor.documentId
-        || previous.epoch !== processor.epoch;
+    const processorChanged = !previous !== !processor
+        || (previous && processor && (
+            previous.tabId !== processor.tabId
+            || previous.documentId !== processor.documentId
+            || previous.epoch !== processor.epoch
+        ));
 
     return { record, processorChanged };
 }
@@ -840,9 +848,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             const visible = msg.visible === true
                 || (msg.visible !== false && msg.type === 'GMGN_REGISTER_MONITOR');
             const preferProcessor = msg.preferProcessor === true;
+            const processorEligible = msg.processorEligible !== false;
             const registration = registerMonitor(sender, {
                 visible,
                 preferProcessor,
+                processorEligible,
                 allowStaleTakeover: msg.type === 'GMGN_MONITOR_HEARTBEAT' || preferProcessor
             });
             if (!registration || !registration.record) {
