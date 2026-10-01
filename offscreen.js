@@ -151,6 +151,16 @@ function blobToDataUrl(blob) {
   });
 }
 
+function isSafePlaybackUrl(url) {
+  let parsed;
+  try { parsed = new URL(url, location.href); } catch (_) { return false; }
+  if (parsed.protocol === 'data:' || parsed.protocol === 'blob:' || parsed.protocol === 'chrome-extension:') return true;
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  if (/^(localhost|127\.|0\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|\[?::1\]?|\[?fc|\[?fd)/.test(host)) return false;
+  return true;
+}
+
 async function stitchPlaybackItems(list) {
   if (!list || list.length < 2) return list;
   if (typeof GmgnTtsSeam === 'undefined' || typeof GmgnTtsSeam.stitchBlobs !== 'function') return list;
@@ -158,7 +168,7 @@ async function stitchPlaybackItems(list) {
   const blobs = [];
   for (const item of list) {
     const url = resolvePlayUrl(item);
-    if (!url) return list;
+    if (!url || !isSafePlaybackUrl(url)) return list;
     const response = await fetch(url);
     if (!response.ok) return list;
     blobs.push(await response.blob());
