@@ -107,6 +107,9 @@ node .\scripts\diagnostic-log-server.js
 
 ## 📋 更新日志
 
+### 2026.10.1
+- **v1.21.0** — Debot 钱包追踪支持买入、减仓、清仓语音，沿用现有钱包过滤和多链开关
+
 ### 2026.9.15
 - **v1.20.2** — 默认只开 GMGN，同一时间只开一个平台；专属铃文件丢失时改念备注
 
@@ -218,6 +221,13 @@ The offscreen permission is used solely to play local alert sounds and TTS for T
 
 ## 📝 详细商店发布文案 (Store Changelog)
 *(打包脚本 pack.py 会自动提取此段落并打印，方便直接复制到谷歌商店)*
+
+**v1.21.0**
+👛 **Debot 钱包语音**
+- 打开 Debot 钱包追踪后，买入、减仓、清仓会按现有钱包语音播报
+- 备注、链开关、金额、市值、币龄、冷却和屏蔽代币都继续生效
+- Solana、BSC、ETH、Base 等多链按插件里勾选的链出声；页面停在某一条链也不会把其它链裁掉
+- 卖出等仓位结果后再区分减仓和清仓
 
 **v1.20.2**
 🎯 **默认只开 GMGN，没铃就念备注**

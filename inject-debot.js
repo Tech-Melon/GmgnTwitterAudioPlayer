@@ -8,10 +8,11 @@
         if (window.__GMGN_DEBUG_LOGGING === true) console.log(...args);
     };
 
-    debugLog('🚀 [GMGN 盯盘伴侣] Debot 推特注入已启动');
+    debugLog('🚀 [GMGN 盯盘伴侣] Debot 注入已启动');
 
     window.__GMGN_AUDIO_ENABLED = window.__GMGN_AUDIO_ENABLED !== false;
     window.__GMGN_ENABLE_TWITTER = window.__GMGN_ENABLE_TWITTER !== false;
+    window.__GMGN_ENABLE_WALLET = window.__GMGN_ENABLE_WALLET !== false;
     window.__GMGN_ENABLE_DEBOT = window.__GMGN_ENABLE_DEBOT === true;
     window.__GMGN_FILTER = window.__GMGN_FILTER || {
         ready: false,
@@ -19,7 +20,10 @@
         isProcessor: false,
         master: true,
         twitter: true,
-        wallet: true
+        wallet: true,
+        walletChains: null,
+        blockedTokens: new Set(),
+        walletAddrs: null
     };
 
     window.addEventListener('GMGN_AUDIO_TOGGLE', function (e) {
@@ -32,46 +36,123 @@
         const d = e.detail || {};
         if (typeof d.master === 'boolean') window.__GMGN_AUDIO_ENABLED = d.master;
         if (typeof d.twitter === 'boolean') window.__GMGN_ENABLE_TWITTER = d.twitter;
+        if (typeof d.wallet === 'boolean') window.__GMGN_ENABLE_WALLET = d.wallet;
         if (typeof d.debot === 'boolean') window.__GMGN_ENABLE_DEBOT = d.debot;
         const filter = window.__GMGN_FILTER;
         if (filter) {
             if (typeof d.master === 'boolean') filter.master = d.master;
             if (typeof d.twitter === 'boolean') filter.twitter = d.twitter;
+            if (typeof d.wallet === 'boolean') filter.wallet = d.wallet;
             if (typeof d.debot === 'boolean') filter.debot = d.debot;
         }
     });
     window.addEventListener('GMGN_FILTER_SYNC', function (e) {
         const d = e.detail || {};
-        const prev = window.__GMGN_FILTER || {};
+        const normalize = window.GmgnDebotWallet && typeof window.GmgnDebotWallet.normalizeChain === 'function'
+            ? window.GmgnDebotWallet.normalizeChain
+            : function (value) { return String(value || '').trim().toLowerCase(); };
+        const nextChains = Array.isArray(d.walletChains)
+            ? new Set(d.walletChains.map((chain) => normalize(chain)).filter(Boolean))
+            : null;
+        const nextBlocked = new Set(
+            (Array.isArray(d.blockedTokens) ? d.blockedTokens : [])
+                .map((token) => String(token || '').trim().toLowerCase())
+                .filter(Boolean)
+        );
+        const nextAddrs = Array.isArray(d.walletAddrs)
+            ? new Set(d.walletAddrs.map((addr) => String(addr || '').trim().toLowerCase()).filter(Boolean))
+            : null;
         window.__GMGN_FILTER = {
             ready: d.ready !== false,
             roleKnown: d.roleKnown === true,
             isProcessor: d.isProcessor === true,
             master: d.master !== false,
             twitter: d.twitter !== false,
-            wallet: prev.wallet !== false,
+            wallet: d.wallet !== false,
             gmgn: d.gmgn !== false,
             debot: d.debot === true,
-            walletChains: prev.walletChains || null,
-            blockedTokens: prev.blockedTokens || new Set(),
-            walletAddrs: prev.walletAddrs || null
+            walletChains: nextChains && nextChains.size > 0 ? nextChains : null,
+            blockedTokens: nextBlocked,
+            walletAddrs: nextAddrs && nextAddrs.size > 0 ? nextAddrs : null
         };
         if (typeof d.master === 'boolean') window.__GMGN_AUDIO_ENABLED = d.master;
         if (typeof d.twitter === 'boolean') window.__GMGN_ENABLE_TWITTER = d.twitter;
+        if (typeof d.wallet === 'boolean') window.__GMGN_ENABLE_WALLET = d.wallet;
         if (typeof d.debot === 'boolean') window.__GMGN_ENABLE_DEBOT = d.debot;
     });
+
+    function isSilentFollower() {
+        const filter = window.__GMGN_FILTER;
+        return !!(filter
+            && filter.ready === true
+            && filter.roleKnown === true
+            && filter.isProcessor !== true);
+    }
 
     function canEmitTwitter() {
         if (window.__DEBOT_AUDIO_INJECT_GENERATION !== injectionGeneration) return false;
         if (!window.__GMGN_AUDIO_ENABLED) return false;
         if (window.__GMGN_ENABLE_TWITTER === false) return false;
         if (window.__GMGN_ENABLE_DEBOT !== true) return false;
-        const filter = window.__GMGN_FILTER;
-        if (filter
-            && filter.ready === true
-            && filter.roleKnown === true
-            && filter.isProcessor !== true) return false;
+        if (isSilentFollower()) return false;
         return true;
+    }
+
+    function canEmitWallet() {
+        if (window.__DEBOT_AUDIO_INJECT_GENERATION !== injectionGeneration) return false;
+        if (!window.__GMGN_AUDIO_ENABLED) return false;
+        if (window.__GMGN_ENABLE_WALLET === false) return false;
+        if (window.__GMGN_ENABLE_DEBOT !== true) return false;
+        if (isSilentFollower()) return false;
+        return true;
+    }
+
+    function shouldDropWalletItem(item) {
+        if (!item || (item.s !== 'buy' && item.s !== 'sell')) return true;
+        const filter = window.__GMGN_FILTER;
+        if (!filter || filter.ready !== true) return false;
+        const normalize = window.GmgnDebotWallet && typeof window.GmgnDebotWallet.normalizeChain === 'function'
+            ? window.GmgnDebotWallet.normalizeChain
+            : function (value) { return String(value || '').trim().toLowerCase(); };
+        if (filter.walletChains) {
+            const chain = normalize(item.n);
+            if (!chain || !filter.walletChains.has(chain)) return true;
+        }
+        if (filter.blockedTokens && filter.blockedTokens.size > 0) {
+            const token = String(item.bs || '').trim().toLowerCase();
+            if (token && filter.blockedTokens.has(token)) return true;
+        }
+        if (filter.walletAddrs) {
+            const maker = String(item.m || '').trim().toLowerCase();
+            if (!maker || !filter.walletAddrs.has(maker)) return true;
+        }
+        return false;
+    }
+
+    function emitWallet(input) {
+        if (!canEmitWallet()) return;
+        const api = window.GmgnDebotWallet;
+        if (!api || typeof api.normalizeMessage !== 'function') return;
+        let items = [];
+        try {
+            items = api.normalizeMessage(input);
+        } catch (error) {
+            console.error('❌ [GMGN 盯盘伴侣 - Debot] 钱包解析异常:', error);
+            return;
+        }
+        if (!Array.isArray(items) || items.length === 0) return;
+        const wssReceivedAt = Date.now();
+        items.forEach((item) => {
+            if (shouldDropWalletItem(item)) return;
+            debugLog('✅ [GMGN 盯盘伴侣 - Debot] 钱包事件', item.s, item.cnt, item.bs);
+            window.dispatchEvent(new CustomEvent('GMGN_WALLET_MSG', {
+                detail: {
+                    __gmgnWalletEnvelope: true,
+                    item,
+                    wssReceivedAt
+                }
+            }));
+        });
     }
 
     function emitTwitter(result) {
@@ -122,7 +203,9 @@
             assignedOnMessage = null;
         }
         port.addEventListener('message', function (event) {
-            inspectAndEmit(event && event.data);
+            const data = event && event.data;
+            inspectAndEmit(data);
+            emitWallet(data);
             if (typeof assignedOnMessage === 'function') {
                 assignedOnMessage.call(port, event);
             }
@@ -166,6 +249,17 @@
         }
     }
 
+    function isDebotTradeWs(url) {
+        if (!url || typeof url !== 'string') return false;
+        try {
+            const parsed = new URL(url);
+            if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return false;
+            return String(parsed.hostname || '').toLowerCase() === 'sgws.debot.ai';
+        } catch (error) {
+            return url.toLowerCase().indexOf('sgws.debot.ai') !== -1;
+        }
+    }
+
     if (!window.__DEBOT_ORIGINAL_WS) {
         window.__DEBOT_ORIGINAL_WS = window.WebSocket;
     }
@@ -175,10 +269,15 @@
             const ws = protocols !== undefined
                 ? new OriginalWebSocket(url, protocols)
                 : new OriginalWebSocket(url);
-            if (!isDebotPortalWs(url)) return ws;
-            debugLog('🔗 [GMGN 盯盘伴侣 - Debot] 捕获 portal WebSocket:', url);
+            const hookTwitter = isDebotPortalWs(url);
+            const hookWallet = isDebotTradeWs(url);
+            if (!hookTwitter && !hookWallet) return ws;
+            if (hookTwitter) debugLog('🔗 [GMGN 盯盘伴侣 - Debot] 捕获 portal WebSocket:', url);
+            if (hookWallet) debugLog('🔗 [GMGN 盯盘伴侣 - Debot] 捕获钱包 WebSocket:', url);
             ws.addEventListener('message', function (event) {
-                if (typeof event.data === 'string') inspectAndEmit(event.data);
+                if (typeof event.data !== 'string') return;
+                if (hookTwitter) inspectAndEmit(event.data);
+                if (hookWallet) emitWallet(event.data);
             });
             return ws;
         };
