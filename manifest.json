@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "技术瓜盯盘伴侣",
-    "version": "1.21.0",
-    "description": "给 GMGN、Debot 用的推特/钱包实时语音播报（X: 0xTechMelon）",
+    "version": "1.22.0",
+    "description": "给 GMGN、Debot、OKX 用的推特/钱包实时语音播报（X: 0xTechMelon）",
     "icons": {
         "16": "images/icon16.png",
         "48": "images/icon48.png",
@@ -19,7 +19,8 @@
     "permissions": [
         "storage",
         "unlimitedStorage",
-        "offscreen"
+        "offscreen",
+        "scripting"
     ],
     "host_permissions": [
         "*://*.gmgn.ai/*",
@@ -28,7 +29,8 @@
         "*://debot.ai/*"
     ],
     "optional_host_permissions": [
-        "http://127.0.0.1:37921/*"
+        "http://127.0.0.1:37921/*",
+        "*://web3.okx.com/*"
     ],
     "background": {
         "service_worker": "background.js"
@@ -81,6 +83,7 @@
             "resources": [
                 "inject.js",
                 "inject-debot.js",
+                "inject-okx.js",
                 "sounds/default.MP3",
                 "sounds/preset1.MP3",
                 "sounds/elonmusk.MP3",
@@ -91,7 +94,8 @@
                 "*://*.gmgn.ai/*",
                 "*://gmgn.ai/*",
                 "*://*.debot.ai/*",
-                "*://debot.ai/*"
+                "*://debot.ai/*",
+                "*://web3.okx.com/*"
             ]
         }
     ]

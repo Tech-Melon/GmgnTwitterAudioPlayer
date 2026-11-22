@@ -2,6 +2,25 @@
 // 注意：MV3 SW 空闲会休眠，扩展页显示「Service Worker (无效)」多数是休眠，不一定是崩溃
 
 importScripts('lib/event-coordinator.js');
+importScripts('lib/okx-scripts.js');
+
+// OKX 可选平台：授权后动态注册内容脚本；SW 每次唤醒都幂等校准一次（覆盖升级/重载）
+function syncOkxContentScripts(reason) {
+    const api = typeof GmgnOkxScripts !== 'undefined' ? GmgnOkxScripts : null;
+    if (!api || typeof api.syncRegistration !== 'function') return;
+    api.syncRegistration(chrome).then((state) => {
+        if (state === 'registered' || state === 'unregistered') {
+            console.log('[GMGN 盯盘伴侣] OKX 内容脚本', state, reason);
+        }
+    }).catch((error) => {
+        console.warn('[GMGN 盯盘伴侣] OKX 内容脚本同步失败:', reason, error && error.message);
+    });
+}
+syncOkxContentScripts('startup');
+if (chrome.permissions && chrome.permissions.onAdded) {
+    chrome.permissions.onAdded.addListener(() => syncOkxContentScripts('permission_added'));
+    chrome.permissions.onRemoved.addListener(() => syncOkxContentScripts('permission_removed'));
+}
 
 // 语速三档：较快 / 极快 / 闪电
 const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
@@ -810,7 +829,8 @@ function handleKeepaliveTick() {
                 '*://*.gmgn.ai/*',
                 '*://gmgn.ai/*',
                 '*://*.debot.ai/*',
-                '*://debot.ai/*'
+                '*://debot.ai/*',
+                '*://web3.okx.com/*'
             ]
         }, (tabs) => {
             if (chrome.runtime.lastError || !Array.isArray(tabs)) return;

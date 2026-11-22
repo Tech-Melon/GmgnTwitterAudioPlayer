@@ -4,6 +4,7 @@ let configCache = {
     enableWallet: true,
     enableGmgn: true,
     enableDebot: false,
+    enableOkx: false,
     playDefaultUnmapped: true,
     playMappedGeneric: true,
     enableTTS: true,
@@ -291,24 +292,25 @@ function getPagePlatform() {
         const host = String(location.hostname || '').toLowerCase();
         if (host === 'gmgn.ai' || host.endsWith('.gmgn.ai')) return 'gmgn';
         if (host === 'debot.ai' || host.endsWith('.debot.ai')) return 'debot';
+        if (host === 'web3.okx.com') return 'okx';
     } catch (error) {
         /* ignore */
     }
     return '';
 }
 
-function applyPlatformFlags(enableGmgn, enableDebot) {
+/** 三选一互斥：优先级 GMGN > Debot > OKX，同时开启时只保留优先级最高的一个 */
+function applyPlatformFlags(enableGmgn, enableDebot, enableOkx) {
     configCache.enableGmgn = enableGmgn !== false;
-    configCache.enableDebot = enableDebot === true;
-    if (configCache.enableGmgn && configCache.enableDebot) {
-        configCache.enableDebot = false;
-    }
+    configCache.enableDebot = enableDebot === true && !configCache.enableGmgn;
+    configCache.enableOkx = enableOkx === true && !configCache.enableGmgn && !configCache.enableDebot;
 }
 
 function isCurrentPlatformEnabled() {
     const platform = getPagePlatform();
     if (platform === 'gmgn') return configCache.enableGmgn !== false;
     if (platform === 'debot') return configCache.enableDebot === true;
+    if (platform === 'okx') return configCache.enableOkx === true;
     return false;
 }
 
@@ -1052,7 +1054,7 @@ if (!OFFSCREEN_AUDIO_ONLY) {
         configCache.isMasterEnabled = result.isMasterEnabled !== false;
         configCache.enableTwitter = result.enableTwitter !== false;
         configCache.enableWallet = result.enableWallet !== false;
-        applyPlatformFlags(result.enableGmgn, result.enableDebot);
+        applyPlatformFlags(result.enableGmgn, result.enableDebot, result.enableOkx);
         configCache.globalVolume = result.globalVolume !== undefined ? result.globalVolume : 1.0;
         configCache.twitterVolume = result.twitterVolume !== undefined ? result.twitterVolume : (configCache.globalVolume || 1.0);
         configCache.walletVolume = result.walletVolume !== undefined ? result.walletVolume : (configCache.globalVolume || 1.0);
@@ -1116,9 +1118,10 @@ function syncChannelToggles() {
     const wallet = configCache.enableWallet !== false;
     const gmgn = configCache.enableGmgn !== false;
     const debot = configCache.enableDebot === true;
+    const okx = configCache.enableOkx === true;
     window.dispatchEvent(new CustomEvent('GMGN_AUDIO_TOGGLE', { detail: { enabled: master } }));
     window.dispatchEvent(new CustomEvent('GMGN_CHANNEL_TOGGLE', {
-        detail: { master, twitter, wallet, gmgn, debot }
+        detail: { master, twitter, wallet, gmgn, debot, okx }
     }));
     syncInjectFilters();
 }
@@ -1138,6 +1141,10 @@ function syncInjectFilters() {
     const wf = configCache.walletFilters || {};
     const walletChains = Array.isArray(wf.walletChains) ? wf.walletChains : null;
     const blockedTokens = Array.isArray(wf.blockedTokenSymbols) ? wf.blockedTokenSymbols : [];
+    // OKX 推荐流是全站内容，inject 层只放行已配置铃声的账号 + OKX 关注账号
+    const twitterIds = Object.keys(configCache.mappings && typeof configCache.mappings === 'object' ? configCache.mappings : {})
+        .map((id) => String(id || '').trim().replace(/^@+/, '').toLowerCase())
+        .filter(Boolean);
     window.dispatchEvent(new CustomEvent('GMGN_FILTER_SYNC', {
         detail: {
             ready: isCacheReady === true,
@@ -1148,9 +1155,11 @@ function syncInjectFilters() {
             wallet: configCache.enableWallet !== false,
             gmgn: configCache.enableGmgn !== false,
             debot: configCache.enableDebot === true,
+            okx: configCache.enableOkx === true,
             walletChains,
             blockedTokens,
-            walletAddrs
+            walletAddrs,
+            twitterIds
         }
     }));
 }
@@ -1431,13 +1440,22 @@ function isGenericSoundId(audioId) {
     return !!audioId && GENERIC_SOUND_IDS.includes(audioId);
 }
 
+/**
+ * OKX 推荐流是全站内容：只有 OKX「我的关注」账号（trigger.okxFollowed）
+ * 才按 GMGN 关注流遵循「未绑定也播」开关；其余未绑定账号一律不播。
+ */
+function allowUnmappedTwitterDefault(trigger) {
+    if (configCache.playDefaultUnmapped === false) return false;
+    if (getPagePlatform() !== 'okx') return true;
+    return !!(trigger && trigger.okxFollowed === true);
+}
 function classifyTwitterPlay(trigger) {
     if (TwitterPlayPriority) {
         return TwitterPlayPriority.classifyTwitterTrigger(trigger, {
             mappings: configCache.mappings || {},
             customAudios: configCache.customAudios || {},
             playMappedGeneric: configCache.playMappedGeneric,
-            playDefaultUnmapped: configCache.playDefaultUnmapped,
+            playDefaultUnmapped: allowUnmappedTwitterDefault(trigger),
             resolveBuiltinSrc: (audioId) => chrome.runtime.getURL(`sounds/${audioId}`)
         });
     }
@@ -1447,7 +1465,9 @@ function classifyTwitterPlay(trigger) {
     const playExclusive = !!resolveExclusiveAudioSrc(mappedAudioId);
     const playTts = playExclusive
         ? false
-        : (mappedAudioId ? configCache.playMappedGeneric !== false : configCache.playDefaultUnmapped !== false);
+        : (mappedAudioId
+            ? configCache.playMappedGeneric !== false
+            : allowUnmappedTwitterDefault(trigger));
     return {
         playExclusive,
         playTts,
@@ -2570,17 +2590,18 @@ document.addEventListener('visibilitychange', () => {
             TabLeader.init();
         }
         try {
-            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'enableGmgn', 'enableDebot', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => {
+            chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'enableGmgn', 'enableDebot', 'enableOkx', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => {
                 if (chrome.runtime.lastError) return;
             if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
             configCache.defaultAudio = result.defaultAudio || 'sounds/default.MP3';
             if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled !== false;
             if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter !== false;
             if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet !== false;
-            if (result.enableGmgn !== undefined || result.enableDebot !== undefined) {
+            if (result.enableGmgn !== undefined || result.enableDebot !== undefined || result.enableOkx !== undefined) {
                 applyPlatformFlags(
                     result.enableGmgn !== undefined ? result.enableGmgn : configCache.enableGmgn,
-                    result.enableDebot !== undefined ? result.enableDebot : configCache.enableDebot
+                    result.enableDebot !== undefined ? result.enableDebot : configCache.enableDebot,
+                    result.enableOkx !== undefined ? result.enableOkx : configCache.enableOkx
                 );
             }
             if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
@@ -2670,7 +2691,7 @@ function convertBase64ToBlobUrl(customAudiosObj) {
     }
 }
 
-chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'enableGmgn', 'enableDebot', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => { // 🌟 数组加了高级定制选项+旧版字段用于迁移
+chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio', 'isMasterEnabled', 'enableTwitter', 'enableWallet', 'enableGmgn', 'enableDebot', 'enableOkx', 'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped', 'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts', 'walletFilters', 'walletDictionary', 'blockedWsChannels', 'debugLoggingEnabled'], async (result) => { // 🌟 数组加了高级定制选项+旧版字段用于迁移
     if (result.twitterAudioMappings) configCache.mappings = result.twitterAudioMappings;
     if (result.defaultAudio) configCache.defaultAudio = result.defaultAudio;
     if (!configCache.defaultAudio) configCache.defaultAudio = 'sounds/default.MP3';
@@ -2678,7 +2699,7 @@ chrome.storage.local.get(['twitterAudioMappings', 'customAudios', 'defaultAudio'
     if (result.isMasterEnabled !== undefined) configCache.isMasterEnabled = result.isMasterEnabled !== false;
     if (result.enableTwitter !== undefined) configCache.enableTwitter = result.enableTwitter !== false;
     if (result.enableWallet !== undefined) configCache.enableWallet = result.enableWallet !== false;
-    applyPlatformFlags(result.enableGmgn, result.enableDebot);
+    applyPlatformFlags(result.enableGmgn, result.enableDebot, result.enableOkx);
     if (result.globalVolume !== undefined) configCache.globalVolume = result.globalVolume;
     if (result.twitterVolume !== undefined) configCache.twitterVolume = result.twitterVolume;
     if (result.walletVolume !== undefined) configCache.walletVolume = result.walletVolume;
@@ -2828,6 +2849,7 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
         if (changes.twitterAudioMappings) {
             configCache.mappings = changes.twitterAudioMappings.newValue || {};
             needsPreload = true;
+            syncInjectFilters();
         }
         if (changes.globalVolume) configCache.globalVolume = changes.globalVolume.newValue;
         if (changes.twitterVolume) configCache.twitterVolume = changes.twitterVolume.newValue;
@@ -2849,10 +2871,11 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
             channelToggleChanged = true;
             debugLog('🎚️ [GMGN 盯盘伴侣] enableWallet →', configCache.enableWallet);
         }
-        if ('enableGmgn' in changes || 'enableDebot' in changes) {
+        if ('enableGmgn' in changes || 'enableDebot' in changes || 'enableOkx' in changes) {
             applyPlatformFlags(
                 'enableGmgn' in changes ? changes.enableGmgn.newValue : configCache.enableGmgn,
-                'enableDebot' in changes ? changes.enableDebot.newValue : configCache.enableDebot
+                'enableDebot' in changes ? changes.enableDebot.newValue : configCache.enableDebot,
+                'enableOkx' in changes ? changes.enableOkx.newValue : configCache.enableOkx
             );
             channelToggleChanged = true;
             const enabled = isCurrentPlatformEnabled();

@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ☁️ Cloudflare Edge-TTS Worker API 统一入口
     const CF_TTS_API = "https://cloudflare-edge-tts.tech-melon.workers.dev/tts";
     const DIAGNOSTIC_ORIGIN = 'http://127.0.0.1:37921/*';
+const OKX_ORIGIN = '*://web3.okx.com/*';
 
     // 语速三档：较快 / 极快 / 闪电（Edge-TTS prosody rate）
     const TTS_RATE_OPTIONS = ['+15%', '+50%', '+75%'];
@@ -178,6 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
         enableWalletToggle: document.getElementById('enableWalletToggle'),
         enableGmgnToggle: document.getElementById('enableGmgnToggle'),
         enableDebotToggle: document.getElementById('enableDebotToggle'),
+        enableOkxToggle: document.getElementById('enableOkxToggle'),
         debugLoggingToggle: document.getElementById('debugLoggingToggle'),
         playDefaultToggle: document.getElementById('playDefaultToggle'), // 名单外账号提醒
         enableTTSToggle: document.getElementById('enableTTSToggle'), // AI 念名
@@ -623,7 +625,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function loadData() {
         chrome.storage.local.get([
             'twitterAudioMappings', 'customAudios', 'isMasterEnabled', 'enableTwitter', 'enableWallet',
-            'enableGmgn', 'enableDebot',
+            'enableGmgn', 'enableDebot', 'enableOkx',
             'globalVolume', 'twitterVolume', 'walletVolume', 'eventFilters', 'playDefaultUnmapped',
             'playMappedGeneric', 'enableTTS', 'ttsVoice', 'ttsRate', 'ttsPitch', 'twitterTts', 'walletTts',
             'walletFilters', 'walletDictionary', 'blockedWsChannels', 'updateNotice',
@@ -639,13 +641,23 @@ document.addEventListener('DOMContentLoaded', () => {
             els.enableTwitterToggle.checked = result.enableTwitter !== false;
             els.enableWalletToggle.checked = result.enableWallet !== false;
             let gmgnOn = result.enableGmgn !== false;
-            let debotOn = result.enableDebot === true;
-            if (gmgnOn && debotOn) {
-                debotOn = false;
-                chrome.storage.local.set({ enableDebot: false });
+            // 三选一互斥：优先级 GMGN > Debot > OKX（与 content.js applyPlatformFlags 一致）
+            const debotOn = result.enableDebot === true && !gmgnOn;
+            const okxOn = result.enableOkx === true && !gmgnOn && !debotOn;
+            if ((result.enableDebot === true && !debotOn) || (result.enableOkx === true && !okxOn)) {
+                chrome.storage.local.set({ enableDebot: debotOn, enableOkx: okxOn });
             }
             if (els.enableGmgnToggle) els.enableGmgnToggle.checked = gmgnOn;
             if (els.enableDebotToggle) els.enableDebotToggle.checked = debotOn;
+            if (els.enableOkxToggle) els.enableOkxToggle.checked = okxOn;
+            // OKX 为可选权限：用户在 Chrome 里撤销授权后，开关自动回落为关闭
+            if (okxOn && chrome.permissions && chrome.permissions.contains) {
+                chrome.permissions.contains({ origins: [OKX_ORIGIN] }, (granted) => {
+                    if (granted) return;
+                    if (els.enableOkxToggle) els.enableOkxToggle.checked = false;
+                    chrome.storage.local.set({ enableOkx: false });
+                });
+            }
             if (els.debugLoggingToggle) {
                 els.debugLoggingToggle.checked = false;
                 if (result.debugLoggingEnabled === true) {
@@ -1296,6 +1308,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (key === 'enableWallet' && els.enableWalletToggle) els.enableWalletToggle.checked = saved;
                 if (key === 'enableGmgn' && els.enableGmgnToggle) els.enableGmgnToggle.checked = saved;
                 if (key === 'enableDebot' && els.enableDebotToggle) els.enableDebotToggle.checked = saved;
+                if (key === 'enableOkx' && els.enableOkxToggle) els.enableOkxToggle.checked = saved;
                 if (key === 'isMasterEnabled' && els.masterToggle) els.masterToggle.checked = saved;
                 if (key === 'debugLoggingEnabled' && els.debugLoggingToggle) els.debugLoggingToggle.checked = saved;
                 if (typeof onToast === 'function') onToast(saved);
@@ -1318,12 +1331,14 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(on ? '钱包监控已开启' : '钱包监控已关闭');
         });
     });
-    const persistPlatformToggles = (enableGmgn, enableDebot, toastText) => {
-        const gmgnOn = enableGmgn === true;
-        const debotOn = enableDebot === true;
+    const persistPlatformToggles = (platform, toastText) => {
+        const gmgnOn = platform === 'gmgn';
+        const debotOn = platform === 'debot';
+        const okxOn = platform === 'okx';
         if (els.enableGmgnToggle) els.enableGmgnToggle.checked = gmgnOn;
         if (els.enableDebotToggle) els.enableDebotToggle.checked = debotOn;
-        chrome.storage.local.set({ enableGmgn: gmgnOn, enableDebot: debotOn }, () => {
+        if (els.enableOkxToggle) els.enableOkxToggle.checked = okxOn;
+        chrome.storage.local.set({ enableGmgn: gmgnOn, enableDebot: debotOn, enableOkx: okxOn }, () => {
             if (chrome.runtime.lastError) {
                 showToast('设置保存失败，请重试');
                 console.warn('[GMGN popup] storage set failed', 'platform', chrome.runtime.lastError);
@@ -1332,26 +1347,46 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(toastText);
         });
     };
-    if (els.enableGmgnToggle) {
-        els.enableGmgnToggle.addEventListener('change', (e) => {
-            const on = e.target.checked === true;
-            if (on) {
-                persistPlatformToggles(true, false, '已开启：仅 GMGN 出声');
+    const PLATFORM_TOGGLES = [
+        { key: 'gmgn', el: els.enableGmgnToggle, label: 'GMGN' },
+        { key: 'debot', el: els.enableDebotToggle, label: 'Debot' },
+        { key: 'okx', el: els.enableOkxToggle, label: 'OKX' }
+    ];
+    /** 仅开启 OKX 时申请 web3.okx.com 权限；必须在 change 事件（用户手势）内同步调用 request */
+    const requestOkxPermission = () => new Promise((resolve) => {
+        if (!chrome.permissions || !chrome.permissions.request) {
+            resolve(false);
+            return;
+        }
+        chrome.permissions.request({ origins: [OKX_ORIGIN] }, (granted) => {
+            if (chrome.runtime.lastError) {
+                console.warn('[GMGN popup] OKX permission request failed', chrome.runtime.lastError);
+                resolve(false);
                 return;
             }
-            persistPlatformToggles(false, els.enableDebotToggle && els.enableDebotToggle.checked === true, '已关闭：GMGN 页面静音');
+            resolve(granted === true);
         });
-    }
-    if (els.enableDebotToggle) {
-        els.enableDebotToggle.addEventListener('change', (e) => {
-            const on = e.target.checked === true;
-            if (on) {
-                persistPlatformToggles(false, true, '已开启：仅 Debot 出声（GMGN 已关）');
+    });
+    PLATFORM_TOGGLES.forEach(({ key, el, label }) => {
+        if (!el) return;
+        el.addEventListener('change', async (e) => {
+            if (e.target.checked !== true) {
+                persistPlatformToggles('', `已关闭：${label} 页面静音`);
                 return;
             }
-            persistPlatformToggles(els.enableGmgnToggle && els.enableGmgnToggle.checked === true, false, '已关闭：Debot 页面静音');
+            if (key === 'okx') {
+                const granted = await requestOkxPermission();
+                if (!granted) {
+                    e.target.checked = false;
+                    showToast('未授权访问 web3.okx.com，OKX 播报保持关闭');
+                    return;
+                }
+                persistPlatformToggles('okx', '已开启：仅 OKX 出声（其他平台已关），请刷新已打开的 OKX 页面');
+                return;
+            }
+            persistPlatformToggles(key, `已开启：仅 ${label} 出声（其他平台已关）`);
         });
-    }
+    });
     if (els.debugLoggingToggle) {
         els.debugLoggingToggle.addEventListener('change', async (e) => {
             const enabled = e.target.checked === true;
