@@ -45,6 +45,7 @@ def create_zip():
         "content.js",
         "inject.js",
         "inject-debot.js",
+        "inject-okx.js",
         "offscreen.html",
         "offscreen.js",
         "update.html",
@@ -72,6 +73,20 @@ def create_zip():
                             file_path = os.path.join(root, file)
                             zipf.write(file_path)
                             print(f"Added {file_path}")
+    # 校验：manifest 引用的文件 + OKX 动态注册脚本必须全部在包内，缺一个就判定打包失败
+    required = {manifest_data["background"]["service_worker"], manifest_data["action"]["default_popup"]}
+    for script in manifest_data.get("content_scripts", []):
+        required.update(script.get("js", []))
+    for group in manifest_data.get("web_accessible_resources", []):
+        required.update(group.get("resources", []))
+    required.update(["lib/twitter-event.js", "lib/okx-twitter.js", "lib/okx-wallet.js", "inject-okx.js"])
+    with zipfile.ZipFile(zip_name, "r") as zipf:
+        packed = {name.replace("\\", "/") for name in zipf.namelist()}
+    missing = sorted(path for path in required if path not in packed)
+    if missing:
+        os.remove(zip_name)
+        print(f"Error: 打包缺少文件 {missing}，已删除 {zip_name}")
+        sys.exit(1)
     print(f"Successfully created {zip_name}")
 
     # 提取并打印最新的商店发布文案
