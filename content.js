@@ -44,6 +44,8 @@ const splitFreshWalletItems = GmgnWalletEvent.splitFreshItems;
 const playWalletSegmentGroups = GmgnWalletEvent.playProgressiveSegmentGroups;
 const mergePendingWalletSellConfirm = GmgnWalletEvent.mergePendingSellConfirm;
 const normalizeWalletAnnounceGapMs = GmgnWalletEvent.normalizeAnnounceGapMs;
+const normalizeMultiBuyConfig = GmgnMultiWalletBuy.normalizeConfig;
+const renderMultiBuyTemplate = GmgnMultiWalletBuy.renderTemplate;
 const stitchTtsBlobs = (typeof GmgnTtsSeam !== 'undefined' && GmgnTtsSeam.stitchBlobs)
     ? GmgnTtsSeam.stitchBlobs.bind(GmgnTtsSeam)
     : async (blobs) => (Array.isArray(blobs) && blobs.length === 1 ? blobs[0] : null);
@@ -428,7 +430,8 @@ function snapshotCoordinatorRuntimeState() {
     return {
         walletLastPlayed: serializeCoordinatorMap(walletLastPlayed),
         userTokenCooldown: serializeCoordinatorMap(userTokenCooldown),
-        userAddrCooldown: serializeCoordinatorMap(userAddrCooldown)
+        userAddrCooldown: serializeCoordinatorMap(userAddrCooldown),
+        multiWalletBuy: multiWalletBuyTracker.serialize()
     };
 }
 
@@ -437,6 +440,7 @@ function applyCoordinatorRuntimeState(state) {
     restoreCoordinatorMap(walletLastPlayed, state.walletLastPlayed);
     restoreCoordinatorMap(userTokenCooldown, state.userTokenCooldown);
     restoreCoordinatorMap(userAddrCooldown, state.userAddrCooldown);
+    multiWalletBuyTracker.restore(state.multiWalletBuy);
 }
 
 function markCoordinatorEventScheduled(eventId) {
@@ -1675,6 +1679,8 @@ function attachWalletChain(item, rawChain) {
 
 function buildWalletSpeechParts(item) {
     if (!item) return [];
+    // 👥 多钱包同买提醒：整句已在入队时渲染好，直接送 TTS
+    if (item.multiBuyText) return [item.multiBuyText];
     const sym = formatTokenNameForSpeech(item.tokenSymbol);
     return buildWalletSingleSpeechParts({
         ...item,
@@ -3494,6 +3500,8 @@ const WALLET_SELL_CONFIRM_WAIT_MS = 1200;
 // ════════════════════════════════════════════════════════════
 const userTokenCooldown = new Map();
 const userAddrCooldown = new Map();
+// 👥 多钱包同买提醒：按 链+CA 统计统计时长内的不同关注钱包
+const multiWalletBuyTracker = GmgnMultiWalletBuy.createTracker();
 
 function playShortBeep(source = 'wallet', eventId = null) {
     const volume = source === 'wallet'
@@ -3677,10 +3685,12 @@ function playWalletDirectly(list) {
     }
 
     // 多笔积压只生成一个有界摘要音频，保证输入洪峰不会线性放大播放时长。
-    const summaryText = formatCompactWalletSpeechGroups(
-        buildWalletSpeechGroups(currentItems),
-        currentItems.length
-    );
+    // 👥 多钱包同买提醒不参与压缩，整句排在摘要最前面。
+    const multiBuyTexts = currentItems.filter((item) => item && item.multiBuyText).map((item) => item.multiBuyText);
+    const normalItems = currentItems.filter((item) => item && !item.multiBuyText);
+    const summaryText = multiBuyTexts.concat(normalItems.length > 0
+        ? formatCompactWalletSpeechGroups(buildWalletSpeechGroups(normalItems), normalItems.length)
+        : []).filter(Boolean).join('，');
     debugLog(`🔊 [GMGN 盯盘伴侣 - 钱包动态批处理] ${currentItems.length} 笔压缩播报: "${summaryText}"`);
     playNetworkTTS(summaryText, 'wallet', onComplete, walletDiagnostic);
 }
@@ -3791,7 +3801,10 @@ async function handleWalletMsg(e) {
         logWalletSkip('金额高于上限', item, { amountUSD, limit: configCache.walletFilters.maxAmount });
         return;
     }
-    if (action === 'buy' && configCache.walletFilters && configCache.walletFilters.buy === false) {
+    // 👥 多钱包同买提醒独立于"买入"开关：开启时买入仍需继续走过滤与计数
+    const multiBuyConfig = normalizeMultiBuyConfig(configCache.walletFilters && configCache.walletFilters.multiBuy);
+    const singleBuyDisabled = action === 'buy' && !!configCache.walletFilters && configCache.walletFilters.buy === false;
+    if (singleBuyDisabled && !multiBuyConfig.enabled) {
         logWalletSkip('买入播报已关闭', item);
         return;
     }
@@ -3872,6 +3885,46 @@ async function handleWalletMsg(e) {
     const isLogClearAll = item.ooc === 1;
     const logActionText = action === 'buy' ? '买入' : (isLogClearAll ? '清仓' : '减仓');
     const fullLogText = `${rename}${logActionText}${tokenSymbol}`;
+    // ════════════════════════════════════════════════════════════
+    // 👥 多钱包同买提醒：在金额/市值/年龄/字典过滤之后、同币/同址冷却之前计数
+    //    触发时本笔只播提醒（替代单笔买入），并绕过单笔冷却
+    // ════════════════════════════════════════════════════════════
+    let multiBuyText = null;
+    if (action === 'buy' && !isPlaybackRetry && multiBuyConfig.enabled && ba) {
+        const multiBuy = multiWalletBuyTracker.record(multiBuyConfig, {
+            key: `${chain}_${ba}`,
+            wallet: maker,
+            name: rename,
+            txKey: txStateKey || null,
+            now
+        });
+        if (multiBuy.triggered) {
+            multiBuyText = renderMultiBuyTemplate(multiBuyConfig.template, {
+                token: formatTokenNameForSpeech(tokenSymbol),
+                count: multiBuy.count,
+                wallet: rename,
+                walletNames: multiBuy.walletNames,
+                chain: resolveWalletSpeakAs(chain),
+                windowSec: multiBuyConfig.windowSec
+            });
+            debugLog(`👥 [GMGN 盯盘伴侣 - 多钱包同买] ${tokenSymbol} ${multiBuy.count} 个钱包（第 ${multiBuy.alertIndex}/${multiBuyConfig.maxAlerts} 次${multiBuy.replay ? '，重试补播' : ''}）: "${multiBuyText}"`);
+            diagnosticLog('wallet_multi_buy_alert', {
+                source: 'wallet',
+                eventId: coordinatorEventId || '',
+                token: tokenSymbol,
+                ca: ba,
+                chain,
+                count: multiBuy.count,
+                alertIndex: multiBuy.alertIndex,
+                cooldownStarted: multiBuy.cooldownStarted,
+                replay: multiBuy.replay === true
+            });
+        }
+    }
+    if (singleBuyDisabled && !multiBuyText) {
+        logWalletSkip('买入播报已关闭', item);
+        return;
+    }
 
     // ════════════════════════════════════════════════════════════
     // 🧊 用户自定义同币冷却器（跨所有钱包，按 CA 冷却）
@@ -3880,7 +3933,7 @@ async function handleWalletMsg(e) {
     //   ⚠️ 关键：清仓(ooc===1)是逃顶信号，绝不被减仓冷却器压制
     //   ⚠️ processed 阶段无法区分减仓/清仓，仅在 confirm 阶段触发冷却判定
     // ════════════════════════════════════════════════════════════
-    if (!isPlaybackRetry && ba && configCache.walletFilters) {
+    if (!isPlaybackRetry && !multiBuyText && ba && configCache.walletFilters) {
         const wf = configCache.walletFilters;
         if (action === 'buy' && wf.buyCooldownEnabled && wf.buyCooldownTime > 0) {
             const userCoolKey = `${ba}_buy`;
@@ -3914,7 +3967,7 @@ async function handleWalletMsg(e) {
     // 同一个钱包地址在 N 秒内的同方向操作只播第一笔（不管买/卖什么币）
     //   ⚠️ 清仓有独立的同址冷却开关
     // ════════════════════════════════════════════════════════════
-    if (!isPlaybackRetry && maker && configCache.walletFilters) {
+    if (!isPlaybackRetry && !multiBuyText && maker && configCache.walletFilters) {
         const wf = configCache.walletFilters;
         const isClearAll = item.ooc === 1;
 
@@ -3985,6 +4038,7 @@ async function handleWalletMsg(e) {
             cnt,
             walletFingerprint,
             wssReceivedAt,
+            multiBuyText,
             _coordinatorEventId: coordinatorEventId,
             _processingState: txHash ? 'processing_buy' : null,
             _successState: true,

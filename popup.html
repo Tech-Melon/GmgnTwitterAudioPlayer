@@ -1067,6 +1067,38 @@
                         <span id="buyAddrCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 28px; text-align: right;">15s</span>
                     </div>
                 </div>
+                <!-- 👥 多钱包同买提醒 -->
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="multiBuyEnabled"> 👥 多钱包同买提醒</label>
+                        <span class="toggle-panel-btn" data-target="multiBuyPanel" style="cursor: pointer; font-size: 10px; color: var(--text-sec); padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.05); user-select: none;">⚙ ▼</span>
+                    </div>
+                    <button id="testMultiBuyBtn" class="btn-icon play" style="padding: 4px 12px; font-size: 12px;">试听 🎵</button>
+                </div>
+                <div id="multiBuyPanel" style="display: none; flex-direction: column; gap: 4px; padding-left: 20px; border-left: 2px solid #e5e5ea; margin-left: 4px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 12px; color: var(--text-sec); white-space: nowrap; min-width: 64px;">↳ ⏱ 统计时长</span>
+                        <input type="range" id="multiBuyWindow" min="10" max="600" step="10" value="60" style="flex: 1; height: 4px; accent-color: var(--primary-color);">
+                        <span id="multiBuyWindowLabel" style="font-size: 11px; color: var(--text-sec); min-width: 40px; text-align: right;">60s</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 12px; color: var(--text-sec); white-space: nowrap; min-width: 64px;">↳ 👛 钱包数</span>
+                        <input type="range" id="multiBuyMinWallets" min="2" max="10" step="1" value="3" style="flex: 1; height: 4px; accent-color: #34c759;">
+                        <span id="multiBuyMinWalletsLabel" style="font-size: 11px; color: var(--text-sec); min-width: 40px; text-align: right;">3个</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 12px; color: var(--text-sec); white-space: nowrap; min-width: 64px;">↳ 🔁 最多播报</span>
+                        <input type="range" id="multiBuyMaxAlerts" min="1" max="10" step="1" value="3" style="flex: 1; height: 4px; accent-color: #ff9500;">
+                        <span id="multiBuyMaxAlertsLabel" style="font-size: 11px; color: var(--text-sec); min-width: 40px; text-align: right;">3次</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 12px; color: var(--text-sec); white-space: nowrap; min-width: 64px;">↳ 🧊 播满冷却</span>
+                        <input type="range" id="multiBuyCooldown" min="1" max="120" step="1" value="10" style="flex: 1; height: 4px; accent-color: #5856d6;">
+                        <span id="multiBuyCooldownLabel" style="font-size: 11px; color: var(--text-sec); min-width: 40px; text-align: right;">10分钟</span>
+                    </div>
+                    <input type="text" id="multiBuyTemplate" maxlength="120" placeholder="{chain}{wallet}等{count}个钱包同时买入{token}，请留意" style="font-size: 12px; padding: 4px 6px; border: 1px solid #e5e5ea; border-radius: 6px;">
+                    <div style="font-size: 11px; color: var(--text-sec); line-height: 1.4;">留空用默认文案。可用变量：{token} 代币名、{count} 钱包数、{wallet} 触发钱包、{wallets} 全部钱包、{chain} 链名、{window} 统计时长；不写变量则原样播报。触发时只播这条提醒，不再单独播该笔买入；每次触发后重新统计，播满次数后该 CA 进入冷却。</div>
+                </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div style="display: flex; align-items: center; gap: 6px;">
                         <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; margin: 0;"><input type="checkbox" id="filterSellReduce" checked> 卖出(减仓)</label>
@@ -1468,6 +1500,7 @@
 
     <script src="lib/jszip.min.js"></script>
     <script src="lib/wallet-event.js"></script>
+    <script src="lib/multi-wallet-buy.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

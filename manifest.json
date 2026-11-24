@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "技术瓜盯盘伴侣",
-    "version": "1.22.0",
+    "version": "1.23.0",
     "description": "给 GMGN、Debot、OKX 用的推特/钱包实时语音播报（X: 0xTechMelon）",
     "icons": {
         "16": "images/icon16.png",
@@ -71,6 +71,7 @@
             ],
             "js": [
                 "lib/wallet-event.js",
+                "lib/multi-wallet-buy.js",
                 "lib/tts-seam.js",
                 "lib/twitter-play-priority.js",
                 "content.js"

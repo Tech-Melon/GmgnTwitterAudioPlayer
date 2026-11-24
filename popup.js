@@ -272,6 +272,18 @@ const OKX_ORIGIN = '*://web3.okx.com/*';
         buyAddrCooldownEnabled: document.getElementById('buyAddrCooldownEnabled'),
         buyAddrCooldownTime: document.getElementById('buyAddrCooldownTime'),
         buyAddrCooldownLabel: document.getElementById('buyAddrCooldownLabel'),
+        // 👥 多钱包同买提醒
+        multiBuyEnabled: document.getElementById('multiBuyEnabled'),
+        multiBuyWindow: document.getElementById('multiBuyWindow'),
+        multiBuyWindowLabel: document.getElementById('multiBuyWindowLabel'),
+        multiBuyMinWallets: document.getElementById('multiBuyMinWallets'),
+        multiBuyMinWalletsLabel: document.getElementById('multiBuyMinWalletsLabel'),
+        multiBuyMaxAlerts: document.getElementById('multiBuyMaxAlerts'),
+        multiBuyMaxAlertsLabel: document.getElementById('multiBuyMaxAlertsLabel'),
+        multiBuyCooldown: document.getElementById('multiBuyCooldown'),
+        multiBuyCooldownLabel: document.getElementById('multiBuyCooldownLabel'),
+        multiBuyTemplate: document.getElementById('multiBuyTemplate'),
+        testMultiBuyBtn: document.getElementById('testMultiBuyBtn'),
         sellReduceAddrCooldownEnabled: document.getElementById('sellReduceAddrCooldownEnabled'),
         sellReduceAddrCooldownTime: document.getElementById('sellReduceAddrCooldownTime'),
         sellReduceAddrCooldownLabel: document.getElementById('sellReduceAddrCooldownLabel'),
@@ -765,6 +777,15 @@ const OKX_ORIGIN = '*://web3.okx.com/*';
             els.sellClearAddrCooldownEnabled.checked = !!walletFilters.sellClearAddrCooldownEnabled;
             els.sellClearAddrCooldownTime.value = walletFilters.sellClearAddrCooldownTime || 15;
             els.sellClearAddrCooldownLabel.textContent = `${els.sellClearAddrCooldownTime.value}s`;
+            // 👥 回显多钱包同买提醒配置
+            const multiBuy = GmgnMultiWalletBuy.normalizeConfig(walletFilters.multiBuy);
+            els.multiBuyEnabled.checked = multiBuy.enabled;
+            els.multiBuyWindow.value = String(multiBuy.windowSec);
+            els.multiBuyMinWallets.value = String(multiBuy.minWallets);
+            els.multiBuyMaxAlerts.value = String(multiBuy.maxAlerts);
+            els.multiBuyCooldown.value = String(multiBuy.cooldownMin);
+            els.multiBuyTemplate.value = multiBuy.template === GmgnMultiWalletBuy.DEFAULT_TEMPLATE ? '' : multiBuy.template;
+            updateMultiBuyLabels();
             // 冷却器面板联动：买入/减仓/清仓关闭时，冷却器置灰
             els.buyCooldownPanel.style.opacity = els.filterBuy.checked ? '1' : '0.4';
             els.buyCooldownPanel.style.pointerEvents = els.filterBuy.checked ? 'auto' : 'none';
@@ -1164,6 +1185,39 @@ const OKX_ORIGIN = '*://web3.okx.com/*';
         playWalletTTS(`${prefix}技术瓜${actionText}比特币`);
     }
 
+    function formatMultiBuyWindowLabel(sec) {
+        const n = Number(sec) || 0;
+        return n >= 60 && n % 60 === 0 ? `${n / 60}分钟` : `${n}s`;
+    }
+    function updateMultiBuyLabels() {
+        els.multiBuyWindowLabel.textContent = formatMultiBuyWindowLabel(els.multiBuyWindow.value);
+        els.multiBuyMinWalletsLabel.textContent = `${els.multiBuyMinWallets.value}个`;
+        els.multiBuyMaxAlertsLabel.textContent = `${els.multiBuyMaxAlerts.value}次`;
+        els.multiBuyCooldownLabel.textContent = `${els.multiBuyCooldown.value}分钟`;
+    }
+    function collectMultiBuyConfig() {
+        return GmgnMultiWalletBuy.normalizeConfig({
+            enabled: els.multiBuyEnabled.checked,
+            windowSec: els.multiBuyWindow.value,
+            minWallets: els.multiBuyMinWallets.value,
+            maxAlerts: els.multiBuyMaxAlerts.value,
+            cooldownMin: els.multiBuyCooldown.value,
+            template: els.multiBuyTemplate.value
+        });
+    }
+    els.testMultiBuyBtn.addEventListener('click', () => {
+        const cfg = collectMultiBuyConfig();
+        const names = ['张三', '李四', '王五', '赵六', '孙七', '周八', '吴九', '郑十', '钱十一', '陈十二']
+            .slice(0, cfg.minWallets);
+        playWalletTTS(GmgnMultiWalletBuy.renderTemplate(cfg.template, {
+            token: '比特币',
+            count: cfg.minWallets,
+            wallet: names[names.length - 1],
+            walletNames: names,
+            chain: getPreviewWalletSpeakAs(),
+            windowSec: cfg.windowSec
+        }));
+    });
     els.testWalletBuyBtn.addEventListener('click', () => playWalletActionPreview('买入'));
     els.testWalletSellReduceBtn.addEventListener('click', () => playWalletActionPreview('减仓'));
     els.testWalletSellClearBtn.addEventListener('click', () => playWalletActionPreview('清仓'));
@@ -1740,6 +1794,8 @@ const OKX_ORIGIN = '*://web3.okx.com/*';
                 sellReduceAddrCooldownTime: parseInt(els.sellReduceAddrCooldownTime.value) || 15,
                 sellClearAddrCooldownEnabled: els.sellClearAddrCooldownEnabled.checked,
                 sellClearAddrCooldownTime: parseInt(els.sellClearAddrCooldownTime.value) || 15,
+                // 👥 多钱包同买提醒
+                multiBuy: collectMultiBuyConfig(),
                 walletChains: getSelectedWalletChains(),
                 customChains: normalizeCustomWalletChains(customWalletChains),
                 chainSpeakEnabled: isChainSpeakMasterEnabled(),
@@ -1807,6 +1863,13 @@ const OKX_ORIGIN = '*://web3.okx.com/*';
     });
     els.sellClearAddrCooldownTime.addEventListener('change', saveWalletFilters);
     els.sellClearAddrCooldownEnabled.addEventListener('change', saveWalletFilters);
+    // 👥 多钱包同买提醒
+    [els.multiBuyWindow, els.multiBuyMinWallets, els.multiBuyMaxAlerts, els.multiBuyCooldown].forEach((input) => {
+        input.addEventListener('input', updateMultiBuyLabels);
+        input.addEventListener('change', () => saveWalletFilters());
+    });
+    els.multiBuyEnabled.addEventListener('change', () => saveWalletFilters());
+    els.multiBuyTemplate.addEventListener('change', () => saveWalletFilters('多钱包提醒文案已保存'));
 
     // 买入/减仓/清仓主开关联动冷却器面板
     els.filterBuy.addEventListener('change', () => {
